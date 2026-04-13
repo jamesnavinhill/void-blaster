@@ -12,6 +12,7 @@ import {
   Vector3,
 } from 'three'
 
+import { loadShipModel } from '../assets/shipModels'
 import type { EnemyDefinition, EnemyId } from '../config/enemies'
 import { getEnemyById } from '../config/enemies'
 import type { TuningConfig } from '../config/game-config'
@@ -41,6 +42,7 @@ interface EnemyInstance {
   spawnOffsetY: number
   phase: number
   age: number
+  visualRoot: Group
 }
 
 interface DamageResult {
@@ -62,9 +64,11 @@ export class EnemySystem {
   private readonly enemies: EnemyInstance[] = []
   private activeTheme: ThemeDefinition
   private nextEnemyId = 1
+  private enemyModelReady = false
 
   constructor(theme: ThemeDefinition) {
     this.activeTheme = theme
+    void this.primeEnemyModel()
   }
 
   setTheme(theme: ThemeDefinition): void {
@@ -128,6 +132,14 @@ export class EnemySystem {
 
   getThreatLevel(): number {
     return Math.min(1, this.getActiveCount() / 6)
+  }
+
+  clear(): void {
+    for (const enemy of this.enemies) {
+      this.deactivateEnemy(enemy)
+    }
+
+    this.nextEnemyId = 1
   }
 
   spawnEnemyById(
@@ -248,6 +260,8 @@ export class EnemySystem {
     })
     const mesh = new Mesh(geometryMap[definition.geometry], material)
     mesh.visible = false
+    const visualRoot = new Group()
+    mesh.add(visualRoot)
     this.object.add(mesh)
 
     const enemy: EnemyInstance = {
@@ -262,9 +276,11 @@ export class EnemySystem {
       spawnOffsetY: 0,
       phase: 0,
       age: 0,
+      visualRoot,
     }
 
     this.enemies.push(enemy)
+    this.applyEnemyVisualState(enemy)
     return enemy
   }
 
@@ -272,5 +288,34 @@ export class EnemySystem {
     enemy.active = false
     enemy.mesh.visible = false
     enemy.mesh.position.setScalar(0)
+  }
+
+  private async primeEnemyModel(): Promise<void> {
+    const model = await loadShipModel('enemy-stylised')
+
+    if (!model) {
+      return
+    }
+
+    this.enemyModelReady = true
+
+    for (const enemy of this.enemies) {
+      enemy.visualRoot.clear()
+      enemy.visualRoot.add(model.clone(true))
+      this.applyEnemyVisualState(enemy)
+    }
+  }
+
+  private applyEnemyVisualState(enemy: EnemyInstance): void {
+    if (this.enemyModelReady) {
+      enemy.material.transparent = true
+      enemy.material.opacity = 0
+      enemy.material.depthWrite = false
+      return
+    }
+
+    enemy.material.transparent = false
+    enemy.material.opacity = 1
+    enemy.material.depthWrite = true
   }
 }

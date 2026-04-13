@@ -42,6 +42,9 @@ interface ShellRefs {
   specialValue: HTMLSpanElement
   specialHint: HTMLSpanElement
   cooldownFill: HTMLDivElement
+  overlay: HTMLDivElement
+  overlayTitle: HTMLParagraphElement
+  overlayMessage: HTMLParagraphElement
   themeSelect: HTMLSelectElement
   movementSpeedInput: HTMLInputElement
   tunnelSpeedInput: HTMLInputElement
@@ -56,6 +59,12 @@ declare global {
   interface Window {
     advanceTime?: (ms: number) => void
     render_game_to_text?: () => string
+    voidBlasterDebug?: {
+      previewEnemy: () => void
+      previewBoss: () => void
+      forceBreach: () => void
+      restartRun: () => void
+    }
   }
 }
 
@@ -95,6 +104,7 @@ export class VoidBlasterApp {
   private rewardLabel = 'Locked'
   private rewardToastUntil = 0
   private bossStatusVisibleUntil = 0
+  private paused = false
 
   constructor(private readonly root: HTMLDivElement) {
     this.shell = this.buildShell()
@@ -183,13 +193,28 @@ export class VoidBlasterApp {
   }
 
   private step(dt: number): void {
-    this.simulationTime += dt
-
     const frameInput = this.input.createFrameInput()
+
+    if (frameInput.restart && this.canRestart()) {
+      this.restartRun()
+      this.updateHud()
+      return
+    }
+
+    if (frameInput.togglePause && !this.isRunFinished()) {
+      this.paused = !this.paused
+    }
 
     if (frameInput.toggleRail) {
       this.setRailOpen(!this.railOpen)
     }
+
+    if (this.paused || this.isRunFinished()) {
+      this.updateHud()
+      return
+    }
+
+    this.simulationTime += dt
 
     if (frameInput.cycleSpecial) {
       this.activeSpecialIndex = (this.activeSpecialIndex + 1) % specialCatalog.length
@@ -381,8 +406,10 @@ export class VoidBlasterApp {
       this.bossSystem.isInIntro() ||
       this.destroyedEnemies > 0 ||
       this.mode === 'breach'
-    const toastVisible = this.simulationTime <= this.rewardToastUntil
+    const toastVisible = this.rewardToastUntil > this.simulationTime
     const integrityRatio = Math.max(0.04, this.playerIntegrity / this.tuning.playerMaxIntegrity)
+    const runFinished = this.isRunFinished()
+    const overlayVisible = this.paused || runFinished
 
     this.shell.hud.dataset.combatActive = String(combatActive)
     this.shell.hud.dataset.showBriefing = String(!combatActive && this.simulationTime < 9)
@@ -408,6 +435,28 @@ export class VoidBlasterApp {
     this.shell.specialHint.textContent =
       cooldownRemaining > 0.05 ? `${cooldownRemaining.toFixed(1)}s cooldown` : 'Ready'
     this.shell.cooldownFill.style.transform = `scaleX(${Math.max(0.04, cooldownRatio).toFixed(3)})`
+    this.shell.overlay.dataset.visible = String(overlayVisible)
+
+    if (this.paused) {
+      this.shell.overlayTitle.textContent = 'Paused'
+      this.shell.overlayMessage.textContent = 'Press Esc to resume the run.'
+      return
+    }
+
+    if (this.mode === 'breach') {
+      this.shell.overlayTitle.textContent = 'Hull Breached'
+      this.shell.overlayMessage.textContent = 'Press R or Enter to restart.'
+      return
+    }
+
+    if (this.encounterPhase === 'CLEAR') {
+      this.shell.overlayTitle.textContent = 'Sector Secured'
+      this.shell.overlayMessage.textContent = 'Press R or Enter to run it again.'
+      return
+    }
+
+    this.shell.overlayTitle.textContent = ''
+    this.shell.overlayMessage.textContent = ''
   }
 
   private applyTheme(themeId: ThemeId): void {
@@ -453,6 +502,16 @@ export class VoidBlasterApp {
     }
 
     window.render_game_to_text = (): string => this.renderGameToText()
+    window.voidBlasterDebug = {
+      previewEnemy: () => this.previewEnemyModel(),
+      previewBoss: () => this.previewBossModel(),
+      forceBreach: () => {
+        this.paused = false
+        this.mode = 'breach'
+        this.updateHud()
+      },
+      restartRun: () => this.restartRun(),
+    }
   }
 
   private renderGameToText(): string {
@@ -462,6 +521,8 @@ export class VoidBlasterApp {
 
     return JSON.stringify({
       mode: this.mode,
+      paused: this.paused,
+      canRestart: this.canRestart(),
       coordinateSystem: 'Origin is tunnel center. +x right, +y up, +z toward the camera.',
       theme: this.activeTheme.id,
       encounter: {
@@ -512,6 +573,74 @@ export class VoidBlasterApp {
     })
   }
 
+  private canRestart(): boolean {
+    return this.mode === 'breach' || this.encounterPhase === 'CLEAR'
+  }
+
+  private isRunFinished(): boolean {
+    return this.canRestart()
+  }
+
+  private restartRun(): void {
+    this.paused = false
+    this.mode = 'combat'
+    this.encounterPhase = 'WAVE'
+    this.encounterLabel = 'Opening Surge'
+    this.progress = 0
+    this.score = 0
+    this.destroyedEnemies = 0
+    this.playerIntegrity = this.tuning.playerMaxIntegrity
+    this.simulationTime = 0
+    this.bossDefeated = false
+    this.phaseBombOverdrive = false
+    this.rewardLabel = 'Locked'
+    this.rewardToastUntil = 0
+    this.bossStatusVisibleUntil = 0
+    this.activeSpecialIndex = 0
+
+    this.input.clearState()
+    this.player.reset()
+    this.weapons.reset()
+    this.enemySystem.clear()
+    this.bossSystem.clear()
+    this.waveDirector.reset()
+    this.lastTimestamp = performance.now()
+  }
+
+  private previewEnemyModel(): void {
+    this.restartRun()
+    this.enemySystem.clear()
+    this.bossSystem.clear()
+    this.weapons.reset()
+    this.encounterPhase = 'WAVE'
+    this.encounterLabel = 'Common Enemy Preview'
+    this.enemySystem.spawnEnemyById('pulse-drone', this.tuning, {
+      x: 2.8,
+      y: 0.7,
+      z: -18,
+      phase: 0,
+    })
+    this.updateHud()
+    this.render()
+  }
+
+  private previewBossModel(): void {
+    this.restartRun()
+    this.enemySystem.clear()
+    this.weapons.reset()
+    this.encounterPhase = 'BOSS'
+    this.encounterLabel = 'Boss Preview'
+    this.bossSystem.startEncounter(getBossById('apex-harbinger'))
+
+    const playerPosition = this.player.getWorldPosition(this.playerWorldPosition)
+    for (let index = 0; index < 180; index += 1) {
+      this.bossSystem.update(1 / 60, this.simulationTime + index / 60, playerPosition)
+    }
+
+    this.updateHud()
+    this.render()
+  }
+
   private readonly handleResize = (): void => {
     const { clientWidth, clientHeight } = this.shell.canvasHost
     this.camera.aspect = clientWidth / clientHeight
@@ -560,7 +689,7 @@ export class VoidBlasterApp {
             </div>
 
             <div class="hud__bottom">
-              <p class="hud__briefing">WASD move. Space fires. B triggers special. F1 opens tuning.</p>
+              <p class="hud__briefing">WASD move. Space fires. B triggers special. Esc pauses. F1 opens tuning.</p>
 
               <section class="hud-widget hud-widget--special">
                 <span class="hud__label">Special</span>
@@ -572,6 +701,13 @@ export class VoidBlasterApp {
                   </div>
                 </div>
               </section>
+            </div>
+
+            <div class="hud__overlay" data-role="overlay" data-visible="false">
+              <div class="hud__overlay-card">
+                <p class="hud__overlay-title" data-role="overlay-title"></p>
+                <p class="hud__overlay-message" data-role="overlay-message"></p>
+              </div>
             </div>
           </div>
           <button class="rail-toggle" type="button">Tune</button>
@@ -648,6 +784,9 @@ export class VoidBlasterApp {
       specialValue: this.root.querySelector<HTMLSpanElement>('[data-role="special-value"]')!,
       specialHint: this.root.querySelector<HTMLSpanElement>('[data-role="special-hint"]')!,
       cooldownFill: this.root.querySelector<HTMLDivElement>('[data-role="cooldown-fill"]')!,
+      overlay: this.root.querySelector<HTMLDivElement>('[data-role="overlay"]')!,
+      overlayTitle: this.root.querySelector<HTMLParagraphElement>('[data-role="overlay-title"]')!,
+      overlayMessage: this.root.querySelector<HTMLParagraphElement>('[data-role="overlay-message"]')!,
       themeSelect: this.root.querySelector<HTMLSelectElement>('[data-role="theme-select"]')!,
       movementSpeedInput: this.root.querySelector<HTMLInputElement>('[data-role="movement-speed"]')!,
       tunnelSpeedInput: this.root.querySelector<HTMLInputElement>('[data-role="tunnel-speed"]')!,

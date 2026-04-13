@@ -13,9 +13,11 @@ import {
 import type { TuningConfig } from '../config/game-config'
 import type { ThemeDefinition } from '../config/themes'
 import type { FrameInput } from '../input/InputController'
+import { loadShipModel } from '../assets/shipModels'
 
 export class PlayerShip {
   readonly object = new Group()
+  private readonly fallbackVisual = new Group()
 
   private readonly hullMaterial = new MeshStandardMaterial({
     color: new Color('#d6e2ff'),
@@ -60,10 +62,12 @@ export class PlayerShip {
     const engineRight = engineLeft.clone()
     engineRight.position.x *= -1
 
-    this.object.add(fuselage, cockpit, leftWing, rightWing, engineLeft, engineRight)
+    this.fallbackVisual.add(fuselage, cockpit, leftWing, rightWing, engineLeft, engineRight)
+    this.object.add(this.fallbackVisual)
     this.object.position.set(0, 0, 4)
 
     this.setTheme(theme)
+    void this.loadSelectedModel()
   }
 
   setTheme(theme: ThemeDefinition): void {
@@ -107,6 +111,15 @@ export class PlayerShip {
     this.object.rotation.z = this.roll
   }
 
+  reset(): void {
+    this.desiredPosition.set(0, 0)
+    this.velocity.set(0, 0)
+    this.previousPosition.set(0, 0)
+    this.roll = 0
+    this.object.position.set(0, 0, 4)
+    this.object.rotation.set(0, 0, 0)
+  }
+
   getVelocityMagnitude(): number {
     return this.velocity.length()
   }
@@ -123,5 +136,16 @@ export class PlayerShip {
   getMuzzleWorldPosition(target = new Vector3()): Vector3 {
     this.object.updateMatrixWorld()
     return target.set(0, 0, -1.55).applyMatrix4(this.object.matrixWorld)
+  }
+
+  private async loadSelectedModel(): Promise<void> {
+    const model = await loadShipModel('player-wipeout')
+
+    if (!model) {
+      return
+    }
+
+    this.fallbackVisual.visible = false
+    this.object.add(model)
   }
 }

@@ -9,6 +9,8 @@ export interface FrameInput {
   rollAxis: number
   cycleSpecial: boolean
   toggleRail: boolean
+  togglePause: boolean
+  restart: boolean
 }
 
 export class InputController {
@@ -19,6 +21,8 @@ export class InputController {
   private wheelRollImpulse = 0
   private cycleSpecialRequested = false
   private toggleRailRequested = false
+  private togglePauseRequested = false
+  private restartRequested = false
 
   constructor(private readonly host: HTMLElement) {
     this.host.tabIndex = 0
@@ -55,13 +59,28 @@ export class InputController {
       rollAxis,
       cycleSpecial: this.cycleSpecialRequested,
       toggleRail: this.toggleRailRequested,
+      togglePause: this.togglePauseRequested,
+      restart: this.restartRequested,
     }
 
     this.wheelRollImpulse = 0
     this.cycleSpecialRequested = false
     this.toggleRailRequested = false
+    this.togglePauseRequested = false
+    this.restartRequested = false
 
     return frameInput
+  }
+
+  clearState(): void {
+    this.pressedKeys.clear()
+    this.pressedMouseButtons.clear()
+    this.pointerActive = false
+    this.wheelRollImpulse = 0
+    this.cycleSpecialRequested = false
+    this.toggleRailRequested = false
+    this.togglePauseRequested = false
+    this.restartRequested = false
   }
 
   private isPressed(code: string): boolean {
@@ -105,6 +124,16 @@ export class InputController {
       this.cycleSpecialRequested = true
     }
 
+    if (event.code === 'Escape') {
+      event.preventDefault()
+      this.togglePauseRequested = true
+      return
+    }
+
+    if (event.code === 'KeyR' || event.code === 'Enter') {
+      this.restartRequested = true
+    }
+
     this.pressedKeys.add(event.code)
   }
 
@@ -113,10 +142,7 @@ export class InputController {
   }
 
   private readonly handleBlur = (): void => {
-    this.pressedKeys.clear()
-    this.pressedMouseButtons.clear()
-    this.pointerActive = false
-    this.wheelRollImpulse = 0
+    this.clearState()
   }
 
   private readonly preventDefault = (event: Event): void => {

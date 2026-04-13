@@ -9,6 +9,7 @@ import {
   Vector3,
 } from 'three'
 
+import { loadShipModel } from '../assets/shipModels'
 import type { BossDefinition } from '../config/bosses'
 import type { ThemeDefinition } from '../config/themes'
 
@@ -49,6 +50,7 @@ export class BossSystem {
     roughness: 0.12,
   })
   private readonly body = new Group()
+  private readonly fallbackVisual = new Group()
   private readonly position = new Vector3()
 
   private active = false
@@ -62,6 +64,7 @@ export class BossSystem {
     this.object.add(this.body)
     this.body.visible = false
     this.setTheme(theme)
+    void this.loadSelectedModel()
   }
 
   setTheme(theme: ThemeDefinition): void {
@@ -198,6 +201,18 @@ export class BossSystem {
     const rearFin = new Mesh(new BoxGeometry(1.1, 2.4, 0.32), this.shellMaterial)
     rearFin.position.set(0, 0, 1.75)
 
-    this.body.add(core, hullTop, hullBottom, leftWing, rightWing, rearFin)
+    this.fallbackVisual.add(core, hullTop, hullBottom, leftWing, rightWing, rearFin)
+    this.body.add(this.fallbackVisual)
+  }
+
+  private async loadSelectedModel(): Promise<void> {
+    const model = await loadShipModel('boss-intergalactic')
+
+    if (!model) {
+      return
+    }
+
+    this.fallbackVisual.visible = false
+    this.body.add(model)
   }
 }

@@ -122,6 +122,19 @@ export class WeaponSystem {
     projectile.mesh.visible = false
   }
 
+  reset(): void {
+    this.nextPrimaryReadyAt = 0
+    this.nextSpecialReadyAt = 0
+    this.specialCooldownDuration = 0
+    this.lastActivatedSpecial = 'Stand by'
+
+    for (const projectile of this.projectiles) {
+      projectile.active = false
+      projectile.ttl = 0
+      projectile.mesh.visible = false
+    }
+  }
+
   private spawnPrimary(origin: Vector3, theme: ThemeDefinition): void {
     this.spawnProjectile(origin, new Vector3(0, 0, -52), 1.4, theme.projectile, false, 1)
   }

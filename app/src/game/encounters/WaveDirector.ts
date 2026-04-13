@@ -50,6 +50,15 @@ export class WaveDirector {
   private phaseTimer = 0
   private rewardClaimed = false
 
+  reset(): void {
+    this.phase = 'wave'
+    this.waveIndex = 0
+    this.queueIndex = 0
+    this.spawnCooldown = 0.45
+    this.phaseTimer = 0
+    this.rewardClaimed = false
+  }
+
   update(context: WaveDirectorUpdateContext): WaveDirectorUpdateResult {
     const spawns: EnemyId[] = []
     let startBossId: BossId | undefined
