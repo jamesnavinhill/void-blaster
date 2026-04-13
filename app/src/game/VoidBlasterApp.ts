@@ -10,11 +10,14 @@ import {
   WebGLRenderer,
 } from 'three'
 
+import { enemyCatalog } from './config/enemies'
 import { defaultTuningConfig, type TuningConfig } from './config/game-config'
 import { specialCatalog } from './config/specials'
 import { getThemeById, themeCatalog, type ThemeDefinition, type ThemeId } from './config/themes'
-import { InputController } from './input/InputController'
+import { EnemySystem } from './enemies/EnemySystem'
+import { InputController, type FrameInput } from './input/InputController'
 import { PlayerShip } from './player/PlayerShip'
+import { CollisionSystem } from './physics/CollisionSystem'
 import { WeaponSystem } from './weapons/WeaponSystem'
 import { TunnelGrid } from './world/TunnelGrid'
 
@@ -25,6 +28,9 @@ interface ShellRefs {
   railToggle: HTMLButtonElement
   themeValue: HTMLSpanElement
   speedValue: HTMLSpanElement
+  scoreValue: HTMLSpanElement
+  integrityValue: HTMLSpanElement
+  enemyCountValue: HTMLSpanElement
   progressValue: HTMLSpanElement
   specialValue: HTMLSpanElement
   specialHint: HTMLSpanElement
@@ -37,6 +43,15 @@ interface ShellRefs {
   tunnelWidthInput: HTMLInputElement
 }
 
+type CombatMode = 'combat' | 'breach'
+
+declare global {
+  interface Window {
+    advanceTime?: (ms: number) => void
+    render_game_to_text?: () => string
+  }
+}
+
 export class VoidBlasterApp {
   private readonly shell: ShellRefs
   private readonly renderer: WebGLRenderer
@@ -47,15 +62,24 @@ export class VoidBlasterApp {
   private readonly player: PlayerShip
   private readonly tunnel: TunnelGrid
   private readonly weapons = new WeaponSystem()
+  private readonly enemySystem: EnemySystem
+  private readonly collisions = new CollisionSystem()
   private readonly cameraTarget = new Vector3()
   private readonly cameraLookTarget = new Vector3()
   private readonly muzzleOrigin = new Vector3()
+  private readonly playerWorldPosition = new Vector3()
 
   private activeTheme: ThemeDefinition = getThemeById('neon')
   private activeSpecialIndex = 0
   private progress = 0
+  private score = 0
+  private destroyedEnemies = 0
+  private playerIntegrity = defaultTuningConfig.playerMaxIntegrity
+  private simulationTime = 0
   private lastTimestamp = 0
   private railOpen = false
+  private mode: CombatMode = 'combat'
+  private lastCombatLog = 'Sector clear'
 
   constructor(private readonly root: HTMLDivElement) {
     this.shell = this.buildShell()
@@ -67,11 +91,13 @@ export class VoidBlasterApp {
     this.input = new InputController(this.shell.viewport)
     this.player = new PlayerShip(this.activeTheme)
     this.tunnel = new TunnelGrid(this.tuning, this.activeTheme)
+    this.enemySystem = new EnemySystem(this.activeTheme)
 
-    this.scene.add(this.player.object, this.tunnel.object, this.weapons.object)
+    this.scene.add(this.player.object, this.tunnel.object, this.enemySystem.object, this.weapons.object)
     this.configureScene()
     this.bindControls()
     this.applyTheme(this.activeTheme.id)
+    this.installDebugHooks()
     this.handleResize()
 
     window.addEventListener('resize', this.handleResize)
@@ -79,6 +105,7 @@ export class VoidBlasterApp {
 
   start(): void {
     this.lastTimestamp = performance.now()
+    this.render()
     window.requestAnimationFrame(this.tick)
   }
 
@@ -126,8 +153,15 @@ export class VoidBlasterApp {
 
   private readonly tick = (timestamp: number): void => {
     const dt = Math.min(0.05, (timestamp - this.lastTimestamp) / 1000 || 0.016)
-    const now = timestamp / 1000
     this.lastTimestamp = timestamp
+
+    this.step(dt)
+    this.render()
+    window.requestAnimationFrame(this.tick)
+  }
+
+  private step(dt: number): void {
+    this.simulationTime += dt
 
     const frameInput = this.input.createFrameInput()
 
@@ -143,22 +177,95 @@ export class VoidBlasterApp {
     this.tunnel.syncConfig(this.tuning)
     this.tunnel.update(dt, this.tuning)
 
+    const playerPosition = this.player.getWorldPosition(this.playerWorldPosition)
+    const combatInput = this.createCombatInput(frameInput)
     const special = this.getActiveSpecial()
+
     this.weapons.update(
       dt,
-      now,
+      this.simulationTime,
       this.player.getMuzzleWorldPosition(this.muzzleOrigin),
-      frameInput,
+      combatInput,
       special,
       this.activeTheme,
     )
 
+    this.enemySystem.update(
+      dt,
+      this.tuning,
+      this.simulationTime,
+      playerPosition,
+      this.mode === 'combat',
+    )
+
+    const collisions = this.collisions.resolve(
+      this.weapons.getActiveProjectiles(),
+      this.enemySystem.getActiveEnemies(),
+      Math.max(this.player.getCollisionRadius(), this.tuning.playerCollisionRadius),
+      playerPosition,
+    )
+
+    this.resolveProjectileHits(collisions.projectileHits)
+    this.resolvePlayerHits(collisions.playerHits)
+
     this.progress += this.tuning.tunnelSpeed * dt * 0.22
     this.updateCamera(dt)
-    this.updateHud(now)
+    this.updateHud()
+  }
 
+  private render(): void {
     this.renderer.render(this.scene, this.camera)
-    window.requestAnimationFrame(this.tick)
+  }
+
+  private createCombatInput(frameInput: FrameInput): FrameInput {
+    if (this.mode === 'combat') {
+      return frameInput
+    }
+
+    return {
+      ...frameInput,
+      primaryFire: false,
+      secondaryFire: false,
+    }
+  }
+
+  private resolveProjectileHits(projectileHits: { projectileId: number; enemyId: number; damage: number }[]): void {
+    for (const hit of projectileHits) {
+      this.weapons.consumeProjectile(hit.projectileId)
+
+      const result = this.enemySystem.applyDamage(hit.enemyId, hit.damage)
+
+      if (!result) {
+        continue
+      }
+
+      if (result.destroyed) {
+        this.score += result.scoreValue
+        this.destroyedEnemies += 1
+        this.lastCombatLog = `${result.name} shattered`
+        continue
+      }
+
+      this.lastCombatLog = `${result.name} hit`
+    }
+  }
+
+  private resolvePlayerHits(playerHits: { enemyId: number; damage: number }[]): void {
+    for (const hit of playerHits) {
+      const enemy = this.enemySystem.consumeEnemy(hit.enemyId)
+
+      if (!enemy) {
+        continue
+      }
+
+      this.playerIntegrity = Math.max(0, this.playerIntegrity - hit.damage)
+      this.lastCombatLog =
+        this.playerIntegrity > 0 ? `${enemy.name} clipped the hull` : 'Hull breach'
+
+      if (this.playerIntegrity <= 0) {
+        this.mode = 'breach'
+      }
+    }
   }
 
   private updateCamera(dt: number): void {
@@ -178,15 +285,18 @@ export class VoidBlasterApp {
     this.camera.lookAt(this.cameraLookTarget)
   }
 
-  private updateHud(now: number): void {
+  private updateHud(): void {
     const special = this.getActiveSpecial()
-    const cooldownRatio = this.weapons.getCooldownRatio(now)
+    const cooldownRatio = this.weapons.getCooldownRatio(this.simulationTime)
 
     this.shell.themeValue.textContent = this.activeTheme.name
     this.shell.speedValue.textContent = `${this.tuning.tunnelSpeed.toFixed(1)} u/s`
+    this.shell.scoreValue.textContent = this.score.toString()
+    this.shell.integrityValue.textContent = `${this.playerIntegrity}/${this.tuning.playerMaxIntegrity}`
+    this.shell.enemyCountValue.textContent = `${this.enemySystem.getActiveCount()} live`
     this.shell.progressValue.textContent = `${Math.floor(this.progress)} m`
     this.shell.specialValue.textContent = special.name
-    this.shell.specialHint.textContent = this.weapons.getLastActivatedSpecial()
+    this.shell.specialHint.textContent = `${this.weapons.getLastActivatedSpecial()} | ${this.lastCombatLog}`
     this.shell.cooldownFill.style.transform = `scaleX(${Math.max(0.04, cooldownRatio).toFixed(3)})`
   }
 
@@ -196,6 +306,7 @@ export class VoidBlasterApp {
     this.scene.fog = new Fog(this.activeTheme.fog, 20, 95)
     this.player.setTheme(this.activeTheme)
     this.tunnel.setTheme(this.activeTheme)
+    this.enemySystem.setTheme(this.activeTheme)
     this.shell.themeSelect.value = themeId
     this.root.style.setProperty('--theme-grid', this.activeTheme.grid)
     this.root.style.setProperty('--theme-accent', this.activeTheme.accent)
@@ -218,6 +329,57 @@ export class VoidBlasterApp {
     return special
   }
 
+  private installDebugHooks(): void {
+    window.advanceTime = (ms: number): void => {
+      const stepDuration = 1 / 60
+      const steps = Math.max(1, Math.round(ms / (1000 / 60)))
+
+      for (let index = 0; index < steps; index += 1) {
+        this.step(stepDuration)
+      }
+
+      this.render()
+    }
+
+    window.render_game_to_text = (): string => this.renderGameToText()
+  }
+
+  private renderGameToText(): string {
+    const playerPosition = this.player.getWorldPosition(new Vector3())
+    const enemies = this.enemySystem.getActiveEnemies()
+
+    return JSON.stringify({
+      mode: this.mode,
+      coordinateSystem: 'Origin is tunnel center. +x right, +y up, +z toward the camera.',
+      theme: this.activeTheme.id,
+      score: this.score,
+      integrity: this.playerIntegrity,
+      progress: Math.floor(this.progress),
+      destroyedEnemies: this.destroyedEnemies,
+      player: {
+        x: Number(playerPosition.x.toFixed(2)),
+        y: Number(playerPosition.y.toFixed(2)),
+        z: Number(playerPosition.z.toFixed(2)),
+        r: this.player.getCollisionRadius(),
+      },
+      special: {
+        selected: this.getActiveSpecial().id,
+        cooldownRemaining: Number(this.weapons.getCooldownRemaining(this.simulationTime).toFixed(2)),
+      },
+      activeEnemies: enemies.map((enemy) => ({
+        id: enemy.id,
+        type: enemy.enemyId,
+        hp: Number(enemy.health.toFixed(2)),
+        x: Number(enemy.position.x.toFixed(2)),
+        y: Number(enemy.position.y.toFixed(2)),
+        z: Number(enemy.position.z.toFixed(2)),
+        r: enemy.radius,
+      })),
+      activeProjectiles: this.weapons.getActiveProjectiles().length,
+      threat: Number(this.enemySystem.getThreatLevel().toFixed(2)),
+    })
+  }
+
   private readonly handleResize = (): void => {
     const { clientWidth, clientHeight } = this.shell.canvasHost
     this.camera.aspect = clientWidth / clientHeight
@@ -233,8 +395,8 @@ export class VoidBlasterApp {
           <div class="hud">
             <div class="hud__brand">
               <p class="hud__eyebrow">Void Blaster</p>
-              <h1>Flight Prototype</h1>
-              <p class="hud__summary">Desktop-first tunnel combat foundation with live tuning and multiple specials.</p>
+              <h1>Encounter Prototype</h1>
+              <p class="hud__summary">Enemy pressure, collision response, and combat telemetry are now wired into the live tunnel build.</p>
             </div>
             <div class="hud__stats">
               <div>
@@ -244,6 +406,18 @@ export class VoidBlasterApp {
               <div>
                 <span class="hud__label">Tunnel Speed</span>
                 <strong data-role="speed-value"></strong>
+              </div>
+              <div>
+                <span class="hud__label">Score</span>
+                <strong data-role="score-value"></strong>
+              </div>
+              <div>
+                <span class="hud__label">Integrity</span>
+                <strong data-role="integrity-value"></strong>
+              </div>
+              <div>
+                <span class="hud__label">Enemies</span>
+                <strong data-role="enemy-count-value"></strong>
               </div>
               <div>
                 <span class="hud__label">Progress</span>
@@ -311,9 +485,9 @@ export class VoidBlasterApp {
           <div class="rail__notes">
             <h3>Current V1 Proof Points</h3>
             <ul>
-              <li>Three preset themes are live now.</li>
-              <li>Three specials are data-defined and playable.</li>
-              <li>The rail stays usable while the game keeps running.</li>
+              <li>${enemyCatalog.length} enemy families are live in the tunnel.</li>
+              <li>Projectile and ship collisions now drive score and hull state.</li>
+              <li>Deterministic hooks expose combat state for browser verification.</li>
             </ul>
           </div>
         </aside>
@@ -327,6 +501,9 @@ export class VoidBlasterApp {
       railToggle: this.root.querySelector<HTMLButtonElement>('.rail-toggle')!,
       themeValue: this.root.querySelector<HTMLSpanElement>('[data-role="theme-value"]')!,
       speedValue: this.root.querySelector<HTMLSpanElement>('[data-role="speed-value"]')!,
+      scoreValue: this.root.querySelector<HTMLSpanElement>('[data-role="score-value"]')!,
+      integrityValue: this.root.querySelector<HTMLSpanElement>('[data-role="integrity-value"]')!,
+      enemyCountValue: this.root.querySelector<HTMLSpanElement>('[data-role="enemy-count-value"]')!,
       progressValue: this.root.querySelector<HTMLSpanElement>('[data-role="progress-value"]')!,
       specialValue: this.root.querySelector<HTMLSpanElement>('[data-role="special-value"]')!,
       specialHint: this.root.querySelector<HTMLSpanElement>('[data-role="special-hint"]')!,

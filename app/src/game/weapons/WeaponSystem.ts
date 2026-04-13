@@ -12,10 +12,20 @@ import type { ThemeDefinition } from '../config/themes'
 import type { FrameInput } from '../input/InputController'
 
 interface Projectile {
+  id: number
   active: boolean
   mesh: Mesh<SphereGeometry, MeshBasicMaterial>
   ttl: number
   velocity: Vector3
+  damage: number
+  radius: number
+}
+
+export interface ProjectileSnapshot {
+  id: number
+  position: Vector3
+  radius: number
+  damage: number
 }
 
 export class WeaponSystem {
@@ -28,6 +38,7 @@ export class WeaponSystem {
   private nextSpecialReadyAt = 0
   private specialCooldownDuration = 0
   private lastActivatedSpecial = 'Stand by'
+  private nextProjectileId = 1
   private readonly spawnVector = new Vector3()
 
   update(
@@ -84,8 +95,30 @@ export class WeaponSystem {
     return this.lastActivatedSpecial
   }
 
+  getActiveProjectiles(): ProjectileSnapshot[] {
+    return this.projectiles
+      .filter((projectile) => projectile.active)
+      .map((projectile) => ({
+        id: projectile.id,
+        position: projectile.mesh.position.clone(),
+        radius: projectile.radius,
+        damage: projectile.damage,
+      }))
+  }
+
+  consumeProjectile(projectileId: number): void {
+    const projectile = this.projectiles.find((entry) => entry.active && entry.id === projectileId)
+
+    if (!projectile) {
+      return
+    }
+
+    projectile.active = false
+    projectile.mesh.visible = false
+  }
+
   private spawnPrimary(origin: Vector3, theme: ThemeDefinition): void {
-    this.spawnProjectile(origin, new Vector3(0, 0, -52), 1.4, theme.projectile, false)
+    this.spawnProjectile(origin, new Vector3(0, 0, -52), 1.4, theme.projectile, false, 1)
   }
 
   private activateSpecial(origin: Vector3, special: SpecialDefinition): void {
@@ -93,7 +126,7 @@ export class WeaponSystem {
       for (let index = 0; index < 12; index += 1) {
         const angle = (Math.PI * 2 * index) / 12
         this.spawnVector.set(Math.cos(angle) * 10, Math.sin(angle) * 6, -30)
-        this.spawnProjectile(origin, this.spawnVector, 1.3, special.color, false)
+        this.spawnProjectile(origin, this.spawnVector, 1.3, special.color, false, 1.1)
       }
       return
     }
@@ -101,12 +134,12 @@ export class WeaponSystem {
     if (special.id === 'prism-spray') {
       const spreads = [-9, -4, 0, 4, 9]
       for (const spread of spreads) {
-        this.spawnProjectile(origin, new Vector3(spread, 0, -40), 1.2, special.color, false)
+        this.spawnProjectile(origin, new Vector3(spread, 0, -40), 1.2, special.color, false, 1.35)
       }
       return
     }
 
-    this.spawnProjectile(origin, new Vector3(0, 0, -25), 2.4, special.color, true)
+    this.spawnProjectile(origin, new Vector3(0, 0, -25), 2.4, special.color, true, 4.5)
   }
 
   private spawnProjectile(
@@ -115,14 +148,19 @@ export class WeaponSystem {
     ttl: number,
     color: string,
     heavy: boolean,
+    damage: number,
   ): void {
     const projectile = this.acquireProjectile(heavy)
+    projectile.id = this.nextProjectileId
+    this.nextProjectileId += 1
     projectile.mesh.material.color.set(new Color(color))
     projectile.mesh.visible = true
     projectile.mesh.position.copy(origin)
     projectile.mesh.scale.setScalar(heavy ? 1.6 : 1)
     projectile.velocity.copy(velocity)
     projectile.ttl = ttl
+    projectile.damage = damage
+    projectile.radius = heavy ? 0.42 : 0.16
     projectile.active = true
   }
 
@@ -141,10 +179,13 @@ export class WeaponSystem {
     this.object.add(mesh)
 
     const projectile: Projectile = {
+      id: 0,
       active: false,
       mesh,
       ttl: 0,
       velocity: new Vector3(),
+      damage: 0,
+      radius: 0,
     }
 
     this.projectiles.push(projectile)

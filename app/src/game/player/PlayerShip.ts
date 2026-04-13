@@ -111,6 +111,10 @@ export class PlayerShip {
     return this.velocity.length()
   }
 
+  getCollisionRadius(): number {
+    return 0.95
+  }
+
   getWorldPosition(target = new Vector3()): Vector3 {
     this.object.updateMatrixWorld()
     return target.setFromMatrixPosition(this.object.matrixWorld)
