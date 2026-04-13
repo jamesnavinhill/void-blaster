@@ -1,0 +1,25 @@
+{
+  "name": "void-blaster-app",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "check": "tsc --noEmit",
+    "lint": "eslint ."
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/three": "^0.183.1",
+    "eslint": "^10.2.0",
+    "globals": "^17.5.0",
+    "typescript": "~6.0.2",
+    "typescript-eslint": "^8.58.1",
+    "vite": "^8.0.4"
+  },
+  "dependencies": {
+    "three": "^0.183.2"
+  }
+}

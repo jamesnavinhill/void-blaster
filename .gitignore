@@ -1,0 +1,19 @@
+resources/
+
+# Root/editor noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.log
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# App build artifacts
+app/node_modules/
+app/dist/
+app/.vite/
+app/.eslintcache
