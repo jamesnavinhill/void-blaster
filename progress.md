@@ -88,3 +88,20 @@ Original prompt: Use the Gemini CLI to kick off some agents while continuing the
   - Manual browser pass reported no runtime/page errors (`errors.json` was empty).
 - Notes:
   - `npm run lint` is currently blocked by generated `.mjs` files under `app/output/web-game/post-opt-pass`, not by this theme slice.
+
+## 2026-04-13 Ship Visual Follow-up
+
+- Cleaned up the GLB/fallback rendering handoff after visual overlap issues:
+  - Player and boss now keep their procedural fallback only until the external model loads successfully.
+  - Once the player/boss GLB attaches, the fallback visual is hidden so the stock geometry no longer clips through the imported ship.
+- Fixed the common-enemy model lifecycle bug:
+  - Previously, only enemies already in memory when the enemy GLB finished loading received the imported model.
+  - Newly spawned enemies kept rendering as fallback blobs forever.
+  - Enemy instances now attach the cached enemy model template whenever they are created or reused.
+  - When an enemy GLB is attached, the fallback blob material is hidden so only the imported enemy ship renders.
+- Verification:
+  - `npm run build` passed.
+  - Manual Playwright screenshot pass confirmed:
+    - player ship renders without the stock block overlay,
+    - boss preview renders without fallback clipping,
+    - common enemy model is visible instead of the fallback blob.
