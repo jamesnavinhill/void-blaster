@@ -67,3 +67,13 @@ export const enemyCatalog: EnemyDefinition[] = [
     geometry: 'icosahedron',
   },
 ]
+
+export function getEnemyById(id: EnemyId): EnemyDefinition {
+  const match = enemyCatalog.find((enemy) => enemy.id === id)
+
+  if (!match) {
+    throw new Error(`Unknown enemy: ${id}`)
+  }
+
+  return match
+}

@@ -28,6 +28,10 @@ export interface ProjectileSnapshot {
   damage: number
 }
 
+export interface WeaponModifierState {
+  phaseBombOverdrive: boolean
+}
+
 export class WeaponSystem {
   readonly object = new Group()
 
@@ -48,6 +52,7 @@ export class WeaponSystem {
     input: FrameInput,
     special: SpecialDefinition,
     theme: ThemeDefinition,
+    modifiers: WeaponModifierState,
   ): void {
     if (input.primaryFire && now >= this.nextPrimaryReadyAt) {
       this.spawnPrimary(origin, theme)
@@ -55,7 +60,7 @@ export class WeaponSystem {
     }
 
     if (input.secondaryFire && now >= this.nextSpecialReadyAt) {
-      this.activateSpecial(origin, special)
+      this.activateSpecial(origin, special, modifiers)
       this.specialCooldownDuration = special.cooldown
       this.nextSpecialReadyAt = now + special.cooldown
       this.lastActivatedSpecial = special.name
@@ -121,7 +126,7 @@ export class WeaponSystem {
     this.spawnProjectile(origin, new Vector3(0, 0, -52), 1.4, theme.projectile, false, 1)
   }
 
-  private activateSpecial(origin: Vector3, special: SpecialDefinition): void {
+  private activateSpecial(origin: Vector3, special: SpecialDefinition, modifiers: WeaponModifierState): void {
     if (special.id === 'nova-burst') {
       for (let index = 0; index < 12; index += 1) {
         const angle = (Math.PI * 2 * index) / 12
@@ -136,6 +141,12 @@ export class WeaponSystem {
       for (const spread of spreads) {
         this.spawnProjectile(origin, new Vector3(spread, 0, -40), 1.2, special.color, false, 1.35)
       }
+      return
+    }
+
+    if (modifiers.phaseBombOverdrive) {
+      this.spawnProjectile(origin, new Vector3(-3.2, 0, -25), 2.5, special.color, true, 4.5)
+      this.spawnProjectile(origin, new Vector3(3.2, 0, -25), 2.5, special.color, true, 4.5)
       return
     }
 

@@ -10,11 +10,14 @@ import {
   WebGLRenderer,
 } from 'three'
 
+import { getBossById } from './config/bosses'
 import { enemyCatalog } from './config/enemies'
 import { defaultTuningConfig, type TuningConfig } from './config/game-config'
 import { specialCatalog } from './config/specials'
 import { getThemeById, themeCatalog, type ThemeDefinition, type ThemeId } from './config/themes'
+import { BossSystem } from './boss/BossSystem'
 import { EnemySystem } from './enemies/EnemySystem'
+import { WaveDirector } from './encounters/WaveDirector'
 import { InputController, type FrameInput } from './input/InputController'
 import { PlayerShip } from './player/PlayerShip'
 import { CollisionSystem } from './physics/CollisionSystem'
@@ -28,6 +31,8 @@ interface ShellRefs {
   railToggle: HTMLButtonElement
   themeValue: HTMLSpanElement
   speedValue: HTMLSpanElement
+  encounterValue: HTMLSpanElement
+  bossValue: HTMLSpanElement
   scoreValue: HTMLSpanElement
   integrityValue: HTMLSpanElement
   enemyCountValue: HTMLSpanElement
@@ -63,6 +68,8 @@ export class VoidBlasterApp {
   private readonly tunnel: TunnelGrid
   private readonly weapons = new WeaponSystem()
   private readonly enemySystem: EnemySystem
+  private readonly bossSystem: BossSystem
+  private readonly waveDirector = new WaveDirector()
   private readonly collisions = new CollisionSystem()
   private readonly cameraTarget = new Vector3()
   private readonly cameraLookTarget = new Vector3()
@@ -80,6 +87,11 @@ export class VoidBlasterApp {
   private railOpen = false
   private mode: CombatMode = 'combat'
   private lastCombatLog = 'Sector clear'
+  private encounterPhase = 'WAVE'
+  private encounterLabel = 'Opening Surge'
+  private bossDefeated = false
+  private phaseBombOverdrive = false
+  private rewardLabel = 'Locked'
 
   constructor(private readonly root: HTMLDivElement) {
     this.shell = this.buildShell()
@@ -92,8 +104,15 @@ export class VoidBlasterApp {
     this.player = new PlayerShip(this.activeTheme)
     this.tunnel = new TunnelGrid(this.tuning, this.activeTheme)
     this.enemySystem = new EnemySystem(this.activeTheme)
+    this.bossSystem = new BossSystem(this.activeTheme)
 
-    this.scene.add(this.player.object, this.tunnel.object, this.enemySystem.object, this.weapons.object)
+    this.scene.add(
+      this.player.object,
+      this.tunnel.object,
+      this.enemySystem.object,
+      this.bossSystem.object,
+      this.weapons.object,
+    )
     this.configureScene()
     this.bindControls()
     this.applyTheme(this.activeTheme.id)
@@ -181,6 +200,35 @@ export class VoidBlasterApp {
     const combatInput = this.createCombatInput(frameInput)
     const special = this.getActiveSpecial()
 
+    const encounterUpdate = this.waveDirector.update({
+      dt,
+      activeEnemies: this.enemySystem.getActiveCount(),
+      bossActive: this.bossSystem.isActive(),
+      bossDefeated: this.bossDefeated,
+    })
+
+    this.encounterPhase = encounterUpdate.encounterPhase
+    this.encounterLabel = encounterUpdate.encounterLabel
+
+    for (const enemyId of encounterUpdate.spawns) {
+      this.enemySystem.spawnEnemyById(enemyId, this.tuning)
+    }
+
+    if (encounterUpdate.startBossId && !this.bossSystem.isActive() && !this.bossDefeated) {
+      this.bossSystem.startEncounter(getBossById(encounterUpdate.startBossId))
+      this.lastCombatLog = 'Boss frame entering sector'
+    }
+
+    if (encounterUpdate.unlockedSpecialId === 'phase-bomb' && !this.phaseBombOverdrive) {
+      this.phaseBombOverdrive = true
+      this.rewardLabel = encounterUpdate.unlockedRewardLabel ?? 'Phase Bomb Overdrive'
+      this.activeSpecialIndex = Math.max(
+        0,
+        specialCatalog.findIndex((entry) => entry.id === 'phase-bomb'),
+      )
+      this.lastCombatLog = `${this.rewardLabel} unlocked`
+    }
+
     this.weapons.update(
       dt,
       this.simulationTime,
@@ -188,25 +236,65 @@ export class VoidBlasterApp {
       combatInput,
       special,
       this.activeTheme,
+      {
+        phaseBombOverdrive: this.phaseBombOverdrive && special.id === 'phase-bomb',
+      },
     )
 
-    this.enemySystem.update(
-      dt,
-      this.tuning,
-      this.simulationTime,
-      playerPosition,
-      this.mode === 'combat',
-    )
+    this.enemySystem.update(dt, this.tuning, playerPosition)
+    this.bossSystem.update(dt, this.simulationTime, playerPosition)
 
-    const collisions = this.collisions.resolve(
-      this.weapons.getActiveProjectiles(),
+    const projectileSnapshots = this.weapons.getActiveProjectiles()
+    const enemyCollisions = this.collisions.resolve(
+      projectileSnapshots,
       this.enemySystem.getActiveEnemies(),
       Math.max(this.player.getCollisionRadius(), this.tuning.playerCollisionRadius),
       playerPosition,
     )
 
-    this.resolveProjectileHits(collisions.projectileHits)
-    this.resolvePlayerHits(collisions.playerHits)
+    this.resolveProjectileHits(enemyCollisions.projectileHits)
+    this.resolvePlayerHits(enemyCollisions.playerHits)
+
+    const bossSnapshot = this.bossSystem.isInIntro() ? null : this.bossSystem.getSnapshot()
+    const bossProjectileHits = this.collisions.resolveProjectileTargetHits(projectileSnapshots, bossSnapshot)
+
+    for (const hit of bossProjectileHits) {
+      this.weapons.consumeProjectile(hit.projectileId)
+      const result = this.bossSystem.applyDamage(hit.damage)
+
+      if (!result) {
+        continue
+      }
+
+      if (result.destroyed) {
+        this.score += result.scoreValue
+        this.bossDefeated = true
+        this.lastCombatLog = `${result.rewardLabel} secured`
+        continue
+      }
+
+      this.lastCombatLog = 'Boss core destabilized'
+    }
+
+    const liveBoss = this.bossSystem.isInIntro() ? null : this.bossSystem.getSnapshot()
+
+    if (
+      liveBoss &&
+      this.collisions.isOverlapping(
+        playerPosition,
+        Math.max(this.player.getCollisionRadius(), this.tuning.playerCollisionRadius),
+        liveBoss.position,
+        liveBoss.radius,
+      )
+    ) {
+      this.playerIntegrity = Math.max(0, this.playerIntegrity - liveBoss.contactDamage)
+      this.lastCombatLog =
+        this.playerIntegrity > 0 ? `${liveBoss.name} raked the hull` : 'Hull breach'
+
+      if (this.playerIntegrity <= 0) {
+        this.mode = 'breach'
+      }
+    }
 
     this.progress += this.tuning.tunnelSpeed * dt * 0.22
     this.updateCamera(dt)
@@ -288,14 +376,20 @@ export class VoidBlasterApp {
   private updateHud(): void {
     const special = this.getActiveSpecial()
     const cooldownRatio = this.weapons.getCooldownRatio(this.simulationTime)
+    const bossSnapshot = this.bossSystem.getSnapshot()
 
     this.shell.themeValue.textContent = this.activeTheme.name
     this.shell.speedValue.textContent = `${this.tuning.tunnelSpeed.toFixed(1)} u/s`
+    this.shell.encounterValue.textContent = `${this.encounterPhase} | ${this.encounterLabel}`
+    this.shell.bossValue.textContent =
+      bossSnapshot ? `${bossSnapshot.health}/${bossSnapshot.maxHealth}` :
+      this.bossDefeated ? this.rewardLabel :
+      'No contact'
     this.shell.scoreValue.textContent = this.score.toString()
     this.shell.integrityValue.textContent = `${this.playerIntegrity}/${this.tuning.playerMaxIntegrity}`
     this.shell.enemyCountValue.textContent = `${this.enemySystem.getActiveCount()} live`
     this.shell.progressValue.textContent = `${Math.floor(this.progress)} m`
-    this.shell.specialValue.textContent = special.name
+    this.shell.specialValue.textContent = this.phaseBombOverdrive ? `${special.name}+` : special.name
     this.shell.specialHint.textContent = `${this.weapons.getLastActivatedSpecial()} | ${this.lastCombatLog}`
     this.shell.cooldownFill.style.transform = `scaleX(${Math.max(0.04, cooldownRatio).toFixed(3)})`
   }
@@ -307,6 +401,7 @@ export class VoidBlasterApp {
     this.player.setTheme(this.activeTheme)
     this.tunnel.setTheme(this.activeTheme)
     this.enemySystem.setTheme(this.activeTheme)
+    this.bossSystem.setTheme(this.activeTheme)
     this.shell.themeSelect.value = themeId
     this.root.style.setProperty('--theme-grid', this.activeTheme.grid)
     this.root.style.setProperty('--theme-accent', this.activeTheme.accent)
@@ -347,15 +442,24 @@ export class VoidBlasterApp {
   private renderGameToText(): string {
     const playerPosition = this.player.getWorldPosition(new Vector3())
     const enemies = this.enemySystem.getActiveEnemies()
+    const boss = this.bossSystem.getSnapshot()
 
     return JSON.stringify({
       mode: this.mode,
       coordinateSystem: 'Origin is tunnel center. +x right, +y up, +z toward the camera.',
       theme: this.activeTheme.id,
+      encounter: {
+        phase: this.encounterPhase,
+        label: this.encounterLabel,
+      },
       score: this.score,
       integrity: this.playerIntegrity,
       progress: Math.floor(this.progress),
       destroyedEnemies: this.destroyedEnemies,
+      rewardLabel: this.rewardLabel,
+      unlocks: {
+        phaseBombOverdrive: this.phaseBombOverdrive,
+      },
       player: {
         x: Number(playerPosition.x.toFixed(2)),
         y: Number(playerPosition.y.toFixed(2)),
@@ -375,8 +479,20 @@ export class VoidBlasterApp {
         z: Number(enemy.position.z.toFixed(2)),
         r: enemy.radius,
       })),
+      boss: boss ? {
+        id: boss.id,
+        hp: Number(boss.health.toFixed(2)),
+        maxHp: boss.maxHealth,
+        x: Number(boss.position.x.toFixed(2)),
+        y: Number(boss.position.y.toFixed(2)),
+        z: Number(boss.position.z.toFixed(2)),
+        r: boss.radius,
+        intro: this.bossSystem.isInIntro(),
+      } : null,
       activeProjectiles: this.weapons.getActiveProjectiles().length,
-      threat: Number(this.enemySystem.getThreatLevel().toFixed(2)),
+      threat: Number(
+        Math.max(this.enemySystem.getThreatLevel(), boss ? boss.health / boss.maxHealth : 0).toFixed(2),
+      ),
     })
   }
 
@@ -395,8 +511,8 @@ export class VoidBlasterApp {
           <div class="hud">
             <div class="hud__brand">
               <p class="hud__eyebrow">Void Blaster</p>
-              <h1>Encounter Prototype</h1>
-              <p class="hud__summary">Enemy pressure, collision response, and combat telemetry are now wired into the live tunnel build.</p>
+              <h1>Boss Ramp</h1>
+              <p class="hud__summary">Wave pacing, a first boss frame, and a reward hook now sit on top of the encounter pipeline.</p>
             </div>
             <div class="hud__stats">
               <div>
@@ -406,6 +522,14 @@ export class VoidBlasterApp {
               <div>
                 <span class="hud__label">Tunnel Speed</span>
                 <strong data-role="speed-value"></strong>
+              </div>
+              <div>
+                <span class="hud__label">Encounter</span>
+                <strong data-role="encounter-value"></strong>
+              </div>
+              <div>
+                <span class="hud__label">Boss Core</span>
+                <strong data-role="boss-value"></strong>
               </div>
               <div>
                 <span class="hud__label">Score</span>
@@ -485,9 +609,9 @@ export class VoidBlasterApp {
           <div class="rail__notes">
             <h3>Current V1 Proof Points</h3>
             <ul>
-              <li>${enemyCatalog.length} enemy families are live in the tunnel.</li>
-              <li>Projectile and ship collisions now drive score and hull state.</li>
-              <li>Deterministic hooks expose combat state for browser verification.</li>
+              <li>${enemyCatalog.length} enemy families are staged through directed waves.</li>
+              <li>The first boss uses the live projectile and collision contracts.</li>
+              <li>Boss clear unlocks a stronger Phase Bomb follow-up hook.</li>
             </ul>
           </div>
         </aside>
@@ -501,6 +625,8 @@ export class VoidBlasterApp {
       railToggle: this.root.querySelector<HTMLButtonElement>('.rail-toggle')!,
       themeValue: this.root.querySelector<HTMLSpanElement>('[data-role="theme-value"]')!,
       speedValue: this.root.querySelector<HTMLSpanElement>('[data-role="speed-value"]')!,
+      encounterValue: this.root.querySelector<HTMLSpanElement>('[data-role="encounter-value"]')!,
+      bossValue: this.root.querySelector<HTMLSpanElement>('[data-role="boss-value"]')!,
       scoreValue: this.root.querySelector<HTMLSpanElement>('[data-role="score-value"]')!,
       integrityValue: this.root.querySelector<HTMLSpanElement>('[data-role="integrity-value"]')!,
       enemyCountValue: this.root.querySelector<HTMLSpanElement>('[data-role="enemy-count-value"]')!,

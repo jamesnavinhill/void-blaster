@@ -17,6 +17,18 @@ export interface CollisionReport {
   playerHits: PlayerEnemyHit[]
 }
 
+export interface SphereTarget<T extends string | number> {
+  id: T
+  radius: number
+  position: { x: number; y: number; z: number }
+}
+
+export interface ProjectileTargetHit<T extends string | number> {
+  projectileId: number
+  targetId: T
+  damage: number
+}
+
 export class CollisionSystem {
   resolve(
     projectiles: ProjectileSnapshot[],
@@ -83,7 +95,24 @@ export class CollisionSystem {
     return { projectileHits, playerHits }
   }
 
-  private isOverlapping(
+  resolveProjectileTargetHits<T extends string | number>(
+    projectiles: ProjectileSnapshot[],
+    target: SphereTarget<T> | null,
+  ): ProjectileTargetHit<T>[] {
+    if (!target) {
+      return []
+    }
+
+    return projectiles
+      .filter((projectile) => this.isOverlapping(projectile.position, projectile.radius, target.position, target.radius))
+      .map((projectile) => ({
+        projectileId: projectile.id,
+        targetId: target.id,
+        damage: projectile.damage,
+      }))
+  }
+
+  isOverlapping(
     aPosition: { x: number; y: number; z: number },
     aRadius: number,
     bPosition: { x: number; y: number; z: number },

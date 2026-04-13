@@ -12,8 +12,8 @@ import {
   Vector3,
 } from 'three'
 
-import type { EnemyDefinition } from '../config/enemies'
-import { enemyCatalog } from '../config/enemies'
+import type { EnemyDefinition, EnemyId } from '../config/enemies'
+import { getEnemyById } from '../config/enemies'
 import type { TuningConfig } from '../config/game-config'
 import type { ThemeDefinition } from '../config/themes'
 
@@ -61,7 +61,6 @@ export class EnemySystem {
 
   private readonly enemies: EnemyInstance[] = []
   private activeTheme: ThemeDefinition
-  private spawnCooldown = 0
   private nextEnemyId = 1
 
   constructor(theme: ThemeDefinition) {
@@ -80,19 +79,8 @@ export class EnemySystem {
   update(
     dt: number,
     tuning: TuningConfig,
-    simulationTime: number,
     playerPosition: Vector3,
-    allowSpawns: boolean,
   ): void {
-    if (allowSpawns) {
-      this.spawnCooldown -= dt
-
-      if (this.spawnCooldown <= 0 && this.getActiveCount() < tuning.maxActiveEnemies) {
-        this.spawnEnemy(tuning, simulationTime)
-        this.spawnCooldown = Math.max(0.35, tuning.enemySpawnInterval)
-      }
-    }
-
     for (const enemy of this.enemies) {
       if (!enemy.active) {
         continue
@@ -140,6 +128,19 @@ export class EnemySystem {
 
   getThreatLevel(): number {
     return Math.min(1, this.getActiveCount() / 6)
+  }
+
+  spawnEnemyById(
+    enemyId: EnemyId,
+    tuning: TuningConfig,
+    options?: {
+      x?: number
+      y?: number
+      z?: number
+      phase?: number
+    },
+  ): void {
+    this.spawnEnemy(getEnemyById(enemyId), tuning, options)
   }
 
   applyDamage(enemyId: number, damage: number): DamageResult | null {
@@ -194,8 +195,16 @@ export class EnemySystem {
     return snapshot
   }
 
-  private spawnEnemy(tuning: TuningConfig, simulationTime: number): void {
-    const definition = this.pickEnemyDefinition(simulationTime)
+  private spawnEnemy(
+    definition: EnemyDefinition,
+    tuning: TuningConfig,
+    options?: {
+      x?: number
+      y?: number
+      z?: number
+      phase?: number
+    },
+  ): void {
     const enemy = this.acquireEnemy(definition)
     const widthLimit = tuning.tunnelWidth * 0.32
     const heightLimit = tuning.tunnelHeight * 0.28
@@ -208,11 +217,15 @@ export class EnemySystem {
     enemy.id = this.nextEnemyId
     this.nextEnemyId += 1
     enemy.health = definition.maxHealth
-    enemy.spawnOffsetX = MathUtils.randFloatSpread(widthLimit * 2)
-    enemy.spawnOffsetY = MathUtils.randFloatSpread(heightLimit * 2)
-    enemy.phase = MathUtils.randFloat(0, Math.PI * 2)
+    enemy.spawnOffsetX = options?.x ?? MathUtils.randFloatSpread(widthLimit * 2)
+    enemy.spawnOffsetY = options?.y ?? MathUtils.randFloatSpread(heightLimit * 2)
+    enemy.phase = options?.phase ?? MathUtils.randFloat(0, Math.PI * 2)
     enemy.age = 0
-    enemy.mesh.position.set(enemy.spawnOffsetX, enemy.spawnOffsetY, -tuning.enemySpawnDepth - Math.random() * 14)
+    enemy.mesh.position.set(
+      enemy.spawnOffsetX,
+      enemy.spawnOffsetY,
+      options?.z ?? -tuning.enemySpawnDepth - Math.random() * 14,
+    )
     enemy.mesh.scale.setScalar(definition.radius)
     enemy.mesh.visible = true
     enemy.active = true
@@ -253,30 +266,6 @@ export class EnemySystem {
 
     this.enemies.push(enemy)
     return enemy
-  }
-
-  private pickEnemyDefinition(simulationTime: number): EnemyDefinition {
-    const progressFactor = Math.min(1, simulationTime / 45)
-    const roll = Math.random()
-    const [drone, weaver, bulwark] = enemyCatalog
-
-    if (!drone) {
-      throw new Error('Enemy catalog is empty')
-    }
-
-    if (progressFactor > 0.7 && roll > 0.82) {
-      if (bulwark) {
-        return bulwark
-      }
-    }
-
-    if (progressFactor > 0.35 && roll > 0.55) {
-      if (weaver) {
-        return weaver
-      }
-    }
-
-    return drone
   }
 
   private deactivateEnemy(enemy: EnemyInstance): void {
