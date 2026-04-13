@@ -59,3 +59,32 @@ Original prompt: Use the Gemini CLI to kick off some agents while continuing the
     - `stylised_spaceship.glb` is a much stronger common-enemy fit than the first trial asset.
     - `intergalactic_spaceship_only_model.glb` works as a boss silhouette, though it currently reads darker/moodier than the player.
     - `Esc` pauses the run and `R` restarts after forced breach.
+
+## 2026-04-13 Theme Polish + Live Theme Tuning
+
+- Expanded the theme system from 3 presets to 6 tuned presets with richer lighting and FX defaults:
+  - `Neon Core`, `Sunrise Drive`, `Moonlight Prism`, `Ember Veil`, `Verdant Flux`, and `Solstice Arc`.
+  - Theme definitions now carry lighting defaults, hull tones, grid palette suggestions, and glow/pulse defaults.
+- Replaced the native theme `<select>` with a styled theme-card grid in the tuning rail.
+  - This resolves the unreadable white popup menu issue and keeps theme selection visually aligned with the rest of the HUD.
+- Added per-theme visual customization with local persistence:
+  - Grid color swatch grid plus custom color input.
+  - Glow intensity dial.
+  - Pulse amount dial.
+  - Overall lighting dial.
+  - Reset button restores the current theme to its authored defaults.
+- Wired the new visual tuning into the actual scene, not just the UI shell:
+  - Scene fog and light intensities now follow theme + user tuning.
+  - Tunnel frame opacity and pulse animate from theme FX values.
+  - Player, enemies, and boss now respond to theme glow/pulse values through emissive tuning.
+- Fixed a rail UX issue found during browser verification:
+  - When the rail was open and scrolled, the `Hide Tuning` button could overlap the top theme card.
+  - The toggle now shifts outside the rail while open so the panel scrolls cleanly.
+- Verification:
+  - `npm run check` passed.
+  - `npm run build` passed.
+  - Playwright client screenshot pass confirmed the rail opens cleanly and renders the styled theme panel.
+  - Manual Playwright pass confirmed live theme switching to `Verdant Flux`, grid color changes, and persisted dial values in `render_game_to_text`.
+  - Manual browser pass reported no runtime/page errors (`errors.json` was empty).
+- Notes:
+  - `npm run lint` is currently blocked by generated `.mjs` files under `app/output/web-game/post-opt-pass`, not by this theme slice.

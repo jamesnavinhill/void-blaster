@@ -64,7 +64,6 @@ export class EnemySystem {
   private readonly enemies: EnemyInstance[] = []
   private activeTheme: ThemeDefinition
   private nextEnemyId = 1
-  private enemyModelReady = false
 
   constructor(theme: ThemeDefinition) {
     this.activeTheme = theme
@@ -84,6 +83,7 @@ export class EnemySystem {
     dt: number,
     tuning: TuningConfig,
     playerPosition: Vector3,
+    simulationTime: number,
   ): void {
     for (const enemy of this.enemies) {
       if (!enemy.active) {
@@ -103,6 +103,10 @@ export class EnemySystem {
       enemy.mesh.position.z += (tuning.tunnelSpeed + enemy.definition.forwardSpeed) * dt
       enemy.mesh.rotation.x += dt * 0.65
       enemy.mesh.rotation.y += dt * 0.95
+      enemy.material.emissiveIntensity =
+        enemy.definition.emissiveIntensity +
+        this.activeTheme.fx.glowIntensity * 0.28 +
+        (Math.sin(simulationTime * 4.8 + enemy.phase) * 0.5 + 0.5) * this.activeTheme.fx.pulseAmount * 0.42
 
       if (enemy.mesh.position.z > tuning.enemyDespawnZ) {
         this.deactivateEnemy(enemy)
@@ -297,8 +301,6 @@ export class EnemySystem {
       return
     }
 
-    this.enemyModelReady = true
-
     for (const enemy of this.enemies) {
       enemy.visualRoot.clear()
       enemy.visualRoot.add(model.clone(true))
@@ -307,13 +309,6 @@ export class EnemySystem {
   }
 
   private applyEnemyVisualState(enemy: EnemyInstance): void {
-    if (this.enemyModelReady) {
-      enemy.material.transparent = true
-      enemy.material.opacity = 0
-      enemy.material.depthWrite = false
-      return
-    }
-
     enemy.material.transparent = false
     enemy.material.opacity = 1
     enemy.material.depthWrite = true

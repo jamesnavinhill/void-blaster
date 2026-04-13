@@ -14,7 +14,15 @@ import { getBossById } from './config/bosses'
 import { enemyCatalog } from './config/enemies'
 import { defaultTuningConfig, type TuningConfig } from './config/game-config'
 import { specialCatalog } from './config/specials'
-import { getThemeById, themeCatalog, type ThemeDefinition, type ThemeId } from './config/themes'
+import {
+  createThemeCustomization,
+  getThemeById,
+  resolveTheme,
+  themeCatalog,
+  type ThemeCustomization,
+  type ThemeDefinition,
+  type ThemeId,
+} from './config/themes'
 import { BossSystem } from './boss/BossSystem'
 import { EnemySystem } from './enemies/EnemySystem'
 import { WaveDirector } from './encounters/WaveDirector'
@@ -45,7 +53,17 @@ interface ShellRefs {
   overlay: HTMLDivElement
   overlayTitle: HTMLParagraphElement
   overlayMessage: HTMLParagraphElement
-  themeSelect: HTMLSelectElement
+  themeButtons: HTMLButtonElement[]
+  themeDescription: HTMLParagraphElement
+  gridSwatches: HTMLDivElement
+  gridColorInput: HTMLInputElement
+  themeResetButton: HTMLButtonElement
+  glowInput: HTMLInputElement
+  glowValue: HTMLSpanElement
+  pulseInput: HTMLInputElement
+  pulseValue: HTMLSpanElement
+  lightingInput: HTMLInputElement
+  lightingValue: HTMLSpanElement
   movementSpeedInput: HTMLInputElement
   tunnelSpeedInput: HTMLInputElement
   rollStrengthInput: HTMLInputElement
@@ -54,6 +72,13 @@ interface ShellRefs {
 }
 
 type CombatMode = 'combat' | 'breach'
+
+interface ThemeStoragePayload {
+  selectedThemeId: ThemeId
+  customizations: Partial<Record<ThemeId, Partial<ThemeCustomization>>>
+}
+
+const THEME_STORAGE_KEY = 'void-blaster-theme-tuning-v1'
 
 declare global {
   interface Window {
@@ -74,6 +99,9 @@ export class VoidBlasterApp {
   private readonly scene = new Scene()
   private readonly camera = new PerspectiveCamera(58, 1, 0.1, 250)
   private readonly tuning: TuningConfig = { ...defaultTuningConfig }
+  private readonly ambientLight = new AmbientLight('#9eb2ff', 1.3)
+  private readonly keyLight = new DirectionalLight('#ffffff', 1.55)
+  private readonly fillLight = new DirectionalLight('#7ce3ff', 1.1)
   private readonly input: InputController
   private readonly player: PlayerShip
   private readonly tunnel: TunnelGrid
@@ -86,8 +114,10 @@ export class VoidBlasterApp {
   private readonly cameraLookTarget = new Vector3()
   private readonly muzzleOrigin = new Vector3()
   private readonly playerWorldPosition = new Vector3()
+  private readonly themeCustomizations: Record<ThemeId, ThemeCustomization>
 
-  private activeTheme: ThemeDefinition = getThemeById('neon')
+  private activeThemeId: ThemeId
+  private activeTheme: ThemeDefinition
   private activeSpecialIndex = 0
   private progress = 0
   private score = 0
@@ -107,6 +137,13 @@ export class VoidBlasterApp {
   private paused = false
 
   constructor(private readonly root: HTMLDivElement) {
+    const storedThemes = this.loadThemeStorage()
+    this.themeCustomizations = this.createThemeCustomizationMap(storedThemes?.customizations)
+    this.activeThemeId = this.resolveStoredThemeId(storedThemes?.selectedThemeId)
+    this.activeTheme = resolveTheme(
+      getThemeById(this.activeThemeId),
+      this.themeCustomizations[this.activeThemeId],
+    )
     this.shell = this.buildShell()
     this.renderer = new WebGLRenderer({ antialias: true, powerPreference: 'high-performance' })
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
@@ -142,22 +179,53 @@ export class VoidBlasterApp {
   }
 
   private configureScene(): void {
-    const ambient = new AmbientLight('#9eb2ff', 1.3)
-    const keyLight = new DirectionalLight('#ffffff', 1.55)
-    keyLight.position.set(6, 7, 10)
-    const fillLight = new DirectionalLight('#7ce3ff', 1.1)
-    fillLight.position.set(-4, 2, -2)
+    this.keyLight.position.set(6, 7, 10)
+    this.fillLight.position.set(-4, 2, -2)
 
-    this.scene.add(ambient, keyLight, fillLight)
+    this.scene.add(this.ambientLight, this.keyLight, this.fillLight)
     this.camera.position.set(0, 1.8, 13.5)
   }
 
   private bindControls(): void {
     this.shell.railToggle.addEventListener('click', () => this.setRailOpen(!this.railOpen))
 
-    this.shell.themeSelect.addEventListener('change', () => {
-      this.applyTheme(this.shell.themeSelect.value as ThemeId)
+    for (const button of this.shell.themeButtons) {
+      button.addEventListener('click', () => {
+        const themeId = button.dataset.themeId as ThemeId | undefined
+
+        if (themeId) {
+          this.applyTheme(themeId)
+        }
+      })
+    }
+
+    this.shell.gridColorInput.addEventListener('input', () => {
+      this.updateActiveThemeCustomization({
+        gridColor: this.shell.gridColorInput.value,
+      })
     })
+
+    this.shell.themeResetButton.addEventListener('click', () => {
+      this.themeCustomizations[this.activeThemeId] = createThemeCustomization(getThemeById(this.activeThemeId))
+      this.applyTheme(this.activeThemeId)
+    })
+
+    this.bindThemeDial(this.shell.glowInput, this.shell.glowValue, (value) => `${value.toFixed(2)}x`, (value) => {
+      this.updateActiveThemeCustomization({ glowIntensity: value })
+    })
+
+    this.bindThemeDial(this.shell.pulseInput, this.shell.pulseValue, (value) => `${Math.round(value * 100)}%`, (value) => {
+      this.updateActiveThemeCustomization({ pulseAmount: value })
+    })
+
+    this.bindThemeDial(
+      this.shell.lightingInput,
+      this.shell.lightingValue,
+      (value) => `${Math.round(value * 100)}%`,
+      (value) => {
+        this.updateActiveThemeCustomization({ lightingIntensity: value })
+      },
+    )
 
     this.bindRange(this.shell.movementSpeedInput, (value) => {
       this.tuning.movementResponsiveness = value
@@ -180,6 +248,20 @@ export class VoidBlasterApp {
   private bindRange(input: HTMLInputElement, onChange: (value: number) => void): void {
     input.addEventListener('input', () => {
       onChange(Number(input.value))
+    })
+  }
+
+  private bindThemeDial(
+    input: HTMLInputElement,
+    output: HTMLSpanElement,
+    formatValue: (value: number) => string,
+    onChange: (value: number) => void,
+  ): void {
+    output.textContent = formatValue(Number(input.value))
+    input.addEventListener('input', () => {
+      const value = Number(input.value)
+      output.textContent = formatValue(value)
+      onChange(value)
     })
   }
 
@@ -220,9 +302,9 @@ export class VoidBlasterApp {
       this.activeSpecialIndex = (this.activeSpecialIndex + 1) % specialCatalog.length
     }
 
-    this.player.update(dt, frameInput, this.tuning)
+    this.player.update(dt, frameInput, this.tuning, this.simulationTime)
     this.tunnel.syncConfig(this.tuning)
-    this.tunnel.update(dt, this.tuning)
+    this.tunnel.update(dt, this.tuning, this.simulationTime)
 
     const playerPosition = this.player.getWorldPosition(this.playerWorldPosition)
     const combatInput = this.createCombatInput(frameInput)
@@ -268,7 +350,7 @@ export class VoidBlasterApp {
       },
     )
 
-    this.enemySystem.update(dt, this.tuning, playerPosition)
+    this.enemySystem.update(dt, this.tuning, playerPosition, this.simulationTime)
     this.bossSystem.update(dt, this.simulationTime, playerPosition)
 
     const projectileSnapshots = this.weapons.getActiveProjectiles()
@@ -460,21 +542,201 @@ export class VoidBlasterApp {
   }
 
   private applyTheme(themeId: ThemeId): void {
-    this.activeTheme = getThemeById(themeId)
+    this.activeThemeId = themeId
+    this.activeTheme = resolveTheme(getThemeById(themeId), this.themeCustomizations[themeId])
     this.scene.background = new Color(this.activeTheme.background)
-    this.scene.fog = new Fog(this.activeTheme.fog, 20, 95)
+    this.scene.fog = new Fog(
+      this.activeTheme.fog,
+      this.activeTheme.lighting.fogNear,
+      this.activeTheme.lighting.fogFar,
+    )
+    this.updateSceneLighting()
     this.player.setTheme(this.activeTheme)
     this.tunnel.setTheme(this.activeTheme)
     this.enemySystem.setTheme(this.activeTheme)
     this.bossSystem.setTheme(this.activeTheme)
-    this.shell.themeSelect.value = themeId
+    this.updateThemeControls()
+    this.syncThemeCssVariables()
+    this.persistThemeStorage()
+  }
+
+  private updateSceneLighting(): void {
+    this.ambientLight.color.set(this.activeTheme.lighting.ambientColor)
+    this.ambientLight.intensity = this.activeTheme.lighting.ambientIntensity
+    this.keyLight.color.set(this.activeTheme.lighting.keyColor)
+    this.keyLight.intensity = this.activeTheme.lighting.keyIntensity
+    this.fillLight.color.set(this.activeTheme.lighting.fillColor)
+    this.fillLight.intensity = this.activeTheme.lighting.fillIntensity
+  }
+
+  private updateActiveThemeCustomization(partial: Partial<ThemeCustomization>): void {
+    this.themeCustomizations[this.activeThemeId] = {
+      ...this.themeCustomizations[this.activeThemeId],
+      ...partial,
+    }
+    this.applyTheme(this.activeThemeId)
+  }
+
+  private updateThemeControls(): void {
+    const baseTheme = getThemeById(this.activeThemeId)
+    const customization = this.themeCustomizations[this.activeThemeId]
+
+    this.shell.themeDescription.textContent = baseTheme.description
+
+    for (const button of this.shell.themeButtons) {
+      button.dataset.active = String(button.dataset.themeId === this.activeThemeId)
+    }
+
+    this.renderGridSwatches(baseTheme.gridPalette, customization.gridColor)
+    this.shell.gridColorInput.value = customization.gridColor
+    this.shell.glowInput.value = customization.glowIntensity.toFixed(2)
+    this.shell.glowValue.textContent = `${customization.glowIntensity.toFixed(2)}x`
+    this.shell.pulseInput.value = customization.pulseAmount.toFixed(2)
+    this.shell.pulseValue.textContent = `${Math.round(customization.pulseAmount * 100)}%`
+    this.shell.lightingInput.value = customization.lightingIntensity.toFixed(2)
+    this.shell.lightingValue.textContent = `${Math.round(customization.lightingIntensity * 100)}%`
+  }
+
+  private renderGridSwatches(colors: string[], activeColor: string): void {
+    this.shell.gridSwatches.innerHTML = colors
+      .map(
+        (color) => `
+          <button
+            class="swatch"
+            type="button"
+            aria-label="Set grid color to ${color}"
+            data-role="grid-swatch"
+            data-color="${color}"
+            data-active="${String(color.toLowerCase() === activeColor.toLowerCase())}"
+            style="--swatch-color: ${color}"
+          ></button>
+        `,
+      )
+      .join('')
+
+    const swatches = this.shell.gridSwatches.querySelectorAll<HTMLButtonElement>('[data-role="grid-swatch"]')
+
+    for (const swatch of swatches) {
+      swatch.addEventListener('click', () => {
+        const color = swatch.dataset.color
+
+        if (color) {
+          this.updateActiveThemeCustomization({ gridColor: color })
+        }
+      })
+    }
+  }
+
+  private syncThemeCssVariables(): void {
+    const customization = this.themeCustomizations[this.activeThemeId]
+    const pulseSpeed = (5.4 - customization.pulseAmount * 2.6).toFixed(2)
+    const glowBlur = `${Math.round(12 + customization.glowIntensity * 14)}px`
+    const glowAlpha = (0.12 + customization.glowIntensity * 0.08).toFixed(2)
+    const pulseAlpha = (0.18 + customization.pulseAmount * 0.2).toFixed(2)
+
     this.root.style.setProperty('--theme-grid', this.activeTheme.grid)
     this.root.style.setProperty('--theme-accent', this.activeTheme.accent)
     this.root.style.setProperty('--theme-background', this.activeTheme.background)
+    this.root.style.setProperty('--theme-grid-rgb', this.toRgbChannels(this.activeTheme.grid))
+    this.root.style.setProperty('--theme-accent-rgb', this.toRgbChannels(this.activeTheme.accent))
+    this.root.style.setProperty('--theme-background-rgb', this.toRgbChannels(this.activeTheme.background))
+    this.root.style.setProperty('--theme-fog-rgb', this.toRgbChannels(this.activeTheme.fog))
+    this.root.style.setProperty('--theme-glow-blur', glowBlur)
+    this.root.style.setProperty('--theme-glow-alpha', glowAlpha)
+    this.root.style.setProperty('--theme-pulse-alpha', pulseAlpha)
+    this.root.style.setProperty('--theme-pulse-speed', `${pulseSpeed}s`)
+  }
+
+  private createThemeCustomizationMap(
+    persisted: ThemeStoragePayload['customizations'] | undefined,
+  ): Record<ThemeId, ThemeCustomization> {
+    return Object.fromEntries(
+      themeCatalog.map((theme) => {
+        const defaults = createThemeCustomization(theme)
+        const stored = persisted?.[theme.id]
+
+        return [
+          theme.id,
+          {
+            gridColor: typeof stored?.gridColor === 'string' ? stored.gridColor : defaults.gridColor,
+            glowIntensity: this.clampStoredNumber(stored?.glowIntensity, 0.5, 1.8, defaults.glowIntensity),
+            pulseAmount: this.clampStoredNumber(stored?.pulseAmount, 0, 1, defaults.pulseAmount),
+            lightingIntensity: this.clampStoredNumber(
+              stored?.lightingIntensity,
+              0.65,
+              1.45,
+              defaults.lightingIntensity,
+            ),
+          },
+        ]
+      }),
+    ) as Record<ThemeId, ThemeCustomization>
+  }
+
+  private clampStoredNumber(
+    value: number | undefined,
+    min: number,
+    max: number,
+    fallback: number,
+  ): number {
+    if (typeof value !== 'number' || Number.isNaN(value)) {
+      return fallback
+    }
+
+    return Math.min(max, Math.max(min, value))
+  }
+
+  private loadThemeStorage(): ThemeStoragePayload | null {
+    try {
+      const raw = window.localStorage.getItem(THEME_STORAGE_KEY)
+
+      if (!raw) {
+        return null
+      }
+
+      return JSON.parse(raw) as ThemeStoragePayload
+    } catch {
+      return null
+    }
+  }
+
+  private persistThemeStorage(): void {
+    const payload: ThemeStoragePayload = {
+      selectedThemeId: this.activeThemeId,
+      customizations: this.themeCustomizations,
+    }
+
+    window.localStorage.setItem(THEME_STORAGE_KEY, JSON.stringify(payload))
+  }
+
+  private resolveStoredThemeId(themeId: ThemeId | undefined): ThemeId {
+    if (themeId && themeCatalog.some((theme) => theme.id === themeId)) {
+      return themeId
+    }
+
+    return 'neon'
+  }
+
+  private toRgbChannels(hexColor: string): string {
+    const normalized = hexColor.replace('#', '')
+    const expanded =
+      normalized.length === 3 ?
+        normalized
+          .split('')
+          .map((value) => `${value}${value}`)
+          .join('') :
+        normalized
+
+    const red = Number.parseInt(expanded.slice(0, 2), 16)
+    const green = Number.parseInt(expanded.slice(2, 4), 16)
+    const blue = Number.parseInt(expanded.slice(4, 6), 16)
+
+    return `${red} ${green} ${blue}`
   }
 
   private setRailOpen(next: boolean): void {
     this.railOpen = next
+    this.root.dataset.railOpen = String(next)
     this.shell.rail.dataset.open = String(next)
     this.shell.railToggle.textContent = next ? 'Hide Tuning' : 'Tune'
   }
@@ -525,6 +787,12 @@ export class VoidBlasterApp {
       canRestart: this.canRestart(),
       coordinateSystem: 'Origin is tunnel center. +x right, +y up, +z toward the camera.',
       theme: this.activeTheme.id,
+      themeTuning: {
+        gridColor: this.activeTheme.grid,
+        glowIntensity: Number(this.themeCustomizations[this.activeThemeId].glowIntensity.toFixed(2)),
+        pulseAmount: Number(this.themeCustomizations[this.activeThemeId].pulseAmount.toFixed(2)),
+        lightingIntensity: Number(this.themeCustomizations[this.activeThemeId].lightingIntensity.toFixed(2)),
+      },
       encounter: {
         phase: this.encounterPhase,
         label: this.encounterLabel,
@@ -717,42 +985,110 @@ export class VoidBlasterApp {
           <div class="rail__header">
             <p class="rail__eyebrow">Live Tuning</p>
             <h2>Gameplay Rail</h2>
-            <p>These controls shape the feel of the current build in real time.</p>
+            <p>Theme, glow, and feel controls update the run in real time.</p>
           </div>
 
-          <label class="field">
-            <span>Theme</span>
-            <select data-role="theme-select">
+          <section class="rail__section rail__section--themes">
+            <div class="section-heading">
+              <span class="section-heading__eyebrow">Theme Set</span>
+              <p class="section-heading__body" data-role="theme-description">${this.activeTheme.description}</p>
+            </div>
+
+            <div class="theme-grid" data-role="theme-grid">
               ${themeCatalog
-                .map((theme) => `<option value="${theme.id}">${theme.name}</option>`)
+                .map(
+                  (theme) => `
+                    <button
+                      class="theme-card"
+                      type="button"
+                      data-role="theme-option"
+                      data-theme-id="${theme.id}"
+                      data-active="${String(theme.id === this.activeThemeId)}"
+                      style="--card-grid: ${theme.grid}; --card-accent: ${theme.accent};"
+                    >
+                      <span class="theme-card__swatches" aria-hidden="true">
+                        <span></span>
+                        <span></span>
+                      </span>
+                      <span class="theme-card__meta">
+                        <strong>${theme.name}</strong>
+                        <small>${theme.description}</small>
+                      </span>
+                    </button>
+                  `,
+                )
                 .join('')}
-            </select>
-          </label>
+            </div>
+          </section>
 
-          <label class="field">
-            <span>Movement Responsiveness</span>
-            <input data-role="movement-speed" type="range" min="3" max="12" step="0.1" value="${this.tuning.movementResponsiveness}">
-          </label>
+          <section class="rail__section rail__section--visuals">
+            <div class="section-heading section-heading--split">
+              <div>
+                <span class="section-heading__eyebrow">Visual Dials</span>
+                <p class="section-heading__body">Tune the tunnel read without changing the weapon palette.</p>
+              </div>
+              <button class="rail__ghost-button" type="button" data-role="theme-reset">Reset</button>
+            </div>
 
-          <label class="field">
-            <span>Tunnel Speed</span>
-            <input data-role="tunnel-speed" type="range" min="10" max="40" step="0.5" value="${this.tuning.tunnelSpeed}">
-          </label>
+            <div class="field-group">
+              <div class="field">
+                <span>Grid Color</span>
+                <div class="swatch-grid" data-role="grid-swatches"></div>
+              </div>
 
-          <label class="field">
-            <span>Roll Strength</span>
-            <input data-role="roll-strength" type="range" min="0.2" max="1.4" step="0.02" value="${this.tuning.rollStrength}">
-          </label>
+              <label class="field field--compact">
+                <span>Custom Tone</span>
+                <input data-role="grid-color-input" type="color" value="${this.activeTheme.grid}">
+              </label>
+            </div>
 
-          <label class="field">
-            <span>Camera Lag</span>
-            <input data-role="camera-lag" type="range" min="1" max="8" step="0.1" value="${this.tuning.cameraLag}">
-          </label>
+            <label class="field">
+              <span>Glow Intensity <strong data-role="glow-value"></strong></span>
+              <input data-role="glow-input" type="range" min="0.5" max="1.8" step="0.01" value="${this.themeCustomizations[this.activeThemeId].glowIntensity}">
+            </label>
 
-          <label class="field">
-            <span>Tunnel Width</span>
-            <input data-role="tunnel-width" type="range" min="14" max="28" step="0.5" value="${this.tuning.tunnelWidth}">
-          </label>
+            <label class="field">
+              <span>Pulse Amount <strong data-role="pulse-value"></strong></span>
+              <input data-role="pulse-input" type="range" min="0" max="1" step="0.01" value="${this.themeCustomizations[this.activeThemeId].pulseAmount}">
+            </label>
+
+            <label class="field">
+              <span>Overall Lighting <strong data-role="lighting-value"></strong></span>
+              <input data-role="lighting-input" type="range" min="0.65" max="1.45" step="0.01" value="${this.themeCustomizations[this.activeThemeId].lightingIntensity}">
+            </label>
+          </section>
+
+          <section class="rail__section">
+            <div class="section-heading">
+              <span class="section-heading__eyebrow">Flight Feel</span>
+              <p class="section-heading__body">Keep gameplay tuning separate while visual tuning stays dialed in.</p>
+            </div>
+
+            <label class="field">
+              <span>Movement Responsiveness</span>
+              <input data-role="movement-speed" type="range" min="3" max="12" step="0.1" value="${this.tuning.movementResponsiveness}">
+            </label>
+
+            <label class="field">
+              <span>Tunnel Speed</span>
+              <input data-role="tunnel-speed" type="range" min="10" max="40" step="0.5" value="${this.tuning.tunnelSpeed}">
+            </label>
+
+            <label class="field">
+              <span>Roll Strength</span>
+              <input data-role="roll-strength" type="range" min="0.2" max="1.4" step="0.02" value="${this.tuning.rollStrength}">
+            </label>
+
+            <label class="field">
+              <span>Camera Lag</span>
+              <input data-role="camera-lag" type="range" min="1" max="8" step="0.1" value="${this.tuning.cameraLag}">
+            </label>
+
+            <label class="field">
+              <span>Tunnel Width</span>
+              <input data-role="tunnel-width" type="range" min="14" max="28" step="0.5" value="${this.tuning.tunnelWidth}">
+            </label>
+          </section>
 
           <div class="rail__notes">
             <h3>Current V1 Proof Points</h3>
@@ -787,7 +1123,19 @@ export class VoidBlasterApp {
       overlay: this.root.querySelector<HTMLDivElement>('[data-role="overlay"]')!,
       overlayTitle: this.root.querySelector<HTMLParagraphElement>('[data-role="overlay-title"]')!,
       overlayMessage: this.root.querySelector<HTMLParagraphElement>('[data-role="overlay-message"]')!,
-      themeSelect: this.root.querySelector<HTMLSelectElement>('[data-role="theme-select"]')!,
+      themeButtons: Array.from(
+        this.root.querySelectorAll<HTMLButtonElement>('[data-role="theme-option"]'),
+      ),
+      themeDescription: this.root.querySelector<HTMLParagraphElement>('[data-role="theme-description"]')!,
+      gridSwatches: this.root.querySelector<HTMLDivElement>('[data-role="grid-swatches"]')!,
+      gridColorInput: this.root.querySelector<HTMLInputElement>('[data-role="grid-color-input"]')!,
+      themeResetButton: this.root.querySelector<HTMLButtonElement>('[data-role="theme-reset"]')!,
+      glowInput: this.root.querySelector<HTMLInputElement>('[data-role="glow-input"]')!,
+      glowValue: this.root.querySelector<HTMLSpanElement>('[data-role="glow-value"]')!,
+      pulseInput: this.root.querySelector<HTMLInputElement>('[data-role="pulse-input"]')!,
+      pulseValue: this.root.querySelector<HTMLSpanElement>('[data-role="pulse-value"]')!,
+      lightingInput: this.root.querySelector<HTMLInputElement>('[data-role="lighting-input"]')!,
+      lightingValue: this.root.querySelector<HTMLSpanElement>('[data-role="lighting-value"]')!,
       movementSpeedInput: this.root.querySelector<HTMLInputElement>('[data-role="movement-speed"]')!,
       tunnelSpeedInput: this.root.querySelector<HTMLInputElement>('[data-role="tunnel-speed"]')!,
       rollStrengthInput: this.root.querySelector<HTMLInputElement>('[data-role="roll-strength"]')!,

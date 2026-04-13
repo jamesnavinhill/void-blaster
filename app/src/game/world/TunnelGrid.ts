@@ -17,6 +17,7 @@ interface TunnelFrame {
 
 export class TunnelGrid {
   readonly object = new Group()
+  private activeTheme: ThemeDefinition
 
   private readonly frameMaterial = new LineBasicMaterial({
     color: new Color('#39f3ff'),
@@ -35,20 +36,26 @@ export class TunnelGrid {
   private signature = ''
 
   constructor(config: TuningConfig, theme: ThemeDefinition) {
+    this.activeTheme = theme
     this.syncConfig(config)
     this.setTheme(theme)
   }
 
   setTheme(theme: ThemeDefinition): void {
+    this.activeTheme = theme
     this.frameMaterial.color.set(theme.grid)
     this.railMaterial.color.set(theme.grid)
+    this.frameMaterial.opacity = theme.fx.gridFrameOpacity
+    this.railMaterial.opacity = theme.fx.gridRailOpacity
 
     if (this.wallRails) {
       this.wallRails.material.color.set(theme.grid)
+      this.wallRails.material.opacity = theme.fx.gridRailOpacity
     }
 
     for (const frame of this.frames) {
       frame.material.color.set(theme.grid)
+      frame.material.opacity = theme.fx.gridFrameOpacity
     }
   }
 
@@ -86,11 +93,11 @@ export class TunnelGrid {
 
       const frame = { line, material }
       this.frames.push(frame)
-      this.updateFrameOpacity(frame, config)
+      this.updateFrameOpacity(frame, config, 0)
     }
   }
 
-  update(dt: number, config: TuningConfig): void {
+  update(dt: number, config: TuningConfig, simulationTime: number): void {
     const wrapThreshold = 12
     const resetDepth = -config.segmentSpacing * (config.segmentCount - 1) - 8
 
@@ -101,7 +108,12 @@ export class TunnelGrid {
         frame.line.position.z = resetDepth
       }
 
-      this.updateFrameOpacity(frame, config)
+      this.updateFrameOpacity(frame, config, simulationTime)
+    }
+
+    if (this.wallRails) {
+      const railPulse = 1 + Math.sin(simulationTime * 2.4) * this.activeTheme.fx.pulseAmount * 0.18
+      this.wallRails.material.opacity = Math.min(0.85, this.activeTheme.fx.gridRailOpacity * railPulse)
     }
   }
 
@@ -144,10 +156,15 @@ export class TunnelGrid {
     return geometry
   }
 
-  private updateFrameOpacity(frame: TunnelFrame, config: TuningConfig): void {
+  private updateFrameOpacity(frame: TunnelFrame, config: TuningConfig, simulationTime: number): void {
     const fadeDepth = config.segmentSpacing * 7
     const normalizedDepth = Math.min(1, Math.max(0, Math.abs(frame.line.position.z) - 8) / fadeDepth)
     const visibility = Math.pow(1 - normalizedDepth, 3.6)
-    frame.material.opacity = 0.012 + visibility * 0.34
+    const pulse =
+      1 + Math.sin(simulationTime * 4.2 - frame.line.position.z * 0.08) * this.activeTheme.fx.pulseAmount * 0.35
+    frame.material.opacity = Math.min(
+      0.96,
+      0.012 + visibility * this.activeTheme.fx.gridFrameOpacity * pulse,
+    )
   }
 }

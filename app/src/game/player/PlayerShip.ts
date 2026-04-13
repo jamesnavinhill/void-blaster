@@ -18,6 +18,7 @@ import { loadShipModel } from '../assets/shipModels'
 export class PlayerShip {
   readonly object = new Group()
   private readonly fallbackVisual = new Group()
+  private activeTheme: ThemeDefinition
 
   private readonly hullMaterial = new MeshStandardMaterial({
     color: new Color('#d6e2ff'),
@@ -40,6 +41,7 @@ export class PlayerShip {
   private roll = 0
 
   constructor(theme: ThemeDefinition) {
+    this.activeTheme = theme
     const fuselage = new Mesh(new BoxGeometry(0.8, 0.45, 2.3), this.hullMaterial)
     fuselage.castShadow = true
 
@@ -71,11 +73,15 @@ export class PlayerShip {
   }
 
   setTheme(theme: ThemeDefinition): void {
+    this.activeTheme = theme
+    this.hullMaterial.color.set(theme.hull)
+    this.hullMaterial.emissive.set(theme.fog)
     this.accentMaterial.color.set(theme.accent)
     this.accentMaterial.emissive.set(theme.accent)
+    this.accentMaterial.emissiveIntensity = 0.8 + theme.fx.glowIntensity * 0.52
   }
 
-  update(dt: number, input: FrameInput, tuning: TuningConfig): void {
+  update(dt: number, input: FrameInput, tuning: TuningConfig, simulationTime: number): void {
     const pointerX = input.pointerActive ? input.pointer.x * tuning.movementRangeX * tuning.mouseInfluence : 0
     const pointerY = input.pointerActive ? input.pointer.y * tuning.movementRangeY * tuning.mouseInfluence : 0
 
@@ -109,6 +115,9 @@ export class PlayerShip {
     this.object.rotation.y = MathUtils.lerp(this.object.rotation.y, desiredYaw, 1 - Math.exp(-5 * dt))
     this.roll = MathUtils.lerp(this.roll, desiredRoll, 1 - Math.exp(-7 * dt))
     this.object.rotation.z = this.roll
+
+    const pulse = 1 + Math.sin(simulationTime * 5.6) * this.activeTheme.fx.pulseAmount * 0.3
+    this.accentMaterial.emissiveIntensity = 0.55 + this.activeTheme.fx.glowIntensity * 0.56 * pulse
   }
 
   reset(): void {
@@ -145,7 +154,6 @@ export class PlayerShip {
       return
     }
 
-    this.fallbackVisual.visible = false
     this.object.add(model)
   }
 }

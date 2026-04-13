@@ -34,6 +34,7 @@ export interface BossDamageResult {
 
 export class BossSystem {
   readonly object = new Group()
+  private activeTheme: ThemeDefinition
 
   private readonly shellMaterial = new MeshStandardMaterial({
     color: new Color('#ffe8ff'),
@@ -60,6 +61,7 @@ export class BossSystem {
   private age = 0
 
   constructor(theme: ThemeDefinition) {
+    this.activeTheme = theme
     this.buildBody()
     this.object.add(this.body)
     this.body.visible = false
@@ -68,8 +70,11 @@ export class BossSystem {
   }
 
   setTheme(theme: ThemeDefinition): void {
+    this.activeTheme = theme
     this.shellMaterial.emissive.set(theme.accent)
     this.coreMaterial.emissive.set(theme.accent)
+    this.shellMaterial.emissiveIntensity = 0.82 + theme.fx.glowIntensity * 0.36
+    this.coreMaterial.emissiveIntensity = 1.04 + theme.fx.glowIntensity * 0.58
   }
 
   startEncounter(definition: BossDefinition): void {
@@ -112,6 +117,10 @@ export class BossSystem {
     this.body.position.copy(this.position)
     this.body.rotation.y += dt * 0.32
     this.body.rotation.z = Math.sin(this.age * 1.3) * 0.08
+
+    const pulse = 1 + Math.sin(simulationTime * 3.6) * this.activeTheme.fx.pulseAmount * 0.34
+    this.shellMaterial.emissiveIntensity = 0.76 + this.activeTheme.fx.glowIntensity * 0.34 * pulse
+    this.coreMaterial.emissiveIntensity = 1 + this.activeTheme.fx.glowIntensity * 0.6 * pulse
   }
 
   applyDamage(damage: number): BossDamageResult | null {
@@ -212,7 +221,6 @@ export class BossSystem {
       return
     }
 
-    this.fallbackVisual.visible = false
     this.body.add(model)
   }
 }

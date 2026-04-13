@@ -1,9 +1,10 @@
 import { Box3, Group, Object3D, Vector3 } from 'three'
+import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 
-import bossShipUrl from '../../../../resources/assets/ships/enemy/boss/glb/intergalactic_spaceship_only_model.glb?url'
-import commonEnemyShipUrl from '../../../../resources/assets/ships/enemy/common/glb/stylised_spaceship.glb?url'
-import playerShipUrl from '../../../../resources/assets/ships/player/glb/wipeout_spaceship.glb?url'
+import bossShipUrl from '../../../../resources/assets/ships/enemy/boss/glb/optimized/intergalactic_spaceship_only_model.optimized.glb?url'
+import commonEnemyShipUrl from '../../../../resources/assets/ships/enemy/common/glb/optimized/stylised_spaceship.optimized.glb?url'
+import playerShipUrl from '../../../../resources/assets/ships/player/glb/optimized/wipeout_spaceship.optimized.glb?url'
 
 export type ShipAssetId = 'player-wipeout' | 'enemy-stylised' | 'boss-intergalactic'
 
@@ -26,6 +27,7 @@ interface ShipAssetDefinition {
 }
 
 const loader = new GLTFLoader()
+loader.setMeshoptDecoder(MeshoptDecoder)
 const sceneCache = new Map<string, Promise<Group | null>>()
 const bounds = new Box3()
 const sizeVector = new Vector3()
@@ -38,7 +40,7 @@ export const selectedShipAssets: Record<ShipAssetId, ShipAssetDefinition> = {
     slot: 'player',
     url: playerShipUrl,
     targetSize: 3.4,
-    rotation: { x: 0, y: Math.PI, z: 0 },
+    rotation: { x: 0, y: 0, z: 0 },
     offset: { x: 0, y: -0.08, z: 0.1 },
   },
   'enemy-stylised': {
