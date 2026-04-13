@@ -52,6 +52,7 @@ export class BossSystem {
   })
   private readonly body = new Group()
   private readonly fallbackVisual = new Group()
+  private modelVisual: Group | null = null
   private readonly position = new Vector3()
 
   private active = false
@@ -221,6 +222,12 @@ export class BossSystem {
       return
     }
 
+    if (this.modelVisual) {
+      this.body.remove(this.modelVisual)
+    }
+
+    this.modelVisual = model
+    this.fallbackVisual.visible = false
     this.body.add(model)
   }
 }

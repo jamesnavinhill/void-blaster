@@ -18,6 +18,7 @@ import { loadShipModel } from '../assets/shipModels'
 export class PlayerShip {
   readonly object = new Group()
   private readonly fallbackVisual = new Group()
+  private modelVisual: Group | null = null
   private activeTheme: ThemeDefinition
 
   private readonly hullMaterial = new MeshStandardMaterial({
@@ -154,6 +155,12 @@ export class PlayerShip {
       return
     }
 
+    if (this.modelVisual) {
+      this.object.remove(this.modelVisual)
+    }
+
+    this.modelVisual = model
+    this.fallbackVisual.visible = false
     this.object.add(model)
   }
 }

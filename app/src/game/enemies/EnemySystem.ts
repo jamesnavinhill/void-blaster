@@ -64,6 +64,7 @@ export class EnemySystem {
   private readonly enemies: EnemyInstance[] = []
   private activeTheme: ThemeDefinition
   private nextEnemyId = 1
+  private enemyModelTemplate: Group | null = null
 
   constructor(theme: ThemeDefinition) {
     this.activeTheme = theme
@@ -252,6 +253,8 @@ export class EnemySystem {
 
     if (inactive) {
       inactive.mesh.geometry = geometryMap[definition.geometry]
+      this.syncEnemyModel(inactive)
+      this.applyEnemyVisualState(inactive)
       return inactive
     }
 
@@ -284,6 +287,7 @@ export class EnemySystem {
     }
 
     this.enemies.push(enemy)
+    this.syncEnemyModel(enemy)
     this.applyEnemyVisualState(enemy)
     return enemy
   }
@@ -301,16 +305,27 @@ export class EnemySystem {
       return
     }
 
+    this.enemyModelTemplate = model
+
     for (const enemy of this.enemies) {
-      enemy.visualRoot.clear()
-      enemy.visualRoot.add(model.clone(true))
+      this.syncEnemyModel(enemy)
       this.applyEnemyVisualState(enemy)
     }
   }
 
+  private syncEnemyModel(enemy: EnemyInstance): void {
+    enemy.visualRoot.clear()
+
+    if (this.enemyModelTemplate) {
+      enemy.visualRoot.add(this.enemyModelTemplate.clone(true))
+    }
+  }
+
   private applyEnemyVisualState(enemy: EnemyInstance): void {
-    enemy.material.transparent = false
-    enemy.material.opacity = 1
-    enemy.material.depthWrite = true
+    const hasExternalModel = enemy.visualRoot.children.length > 0
+
+    enemy.material.transparent = hasExternalModel
+    enemy.material.opacity = hasExternalModel ? 0 : 1
+    enemy.material.depthWrite = !hasExternalModel
   }
 }
