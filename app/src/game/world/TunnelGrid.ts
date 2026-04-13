@@ -12,17 +12,25 @@ import type { ThemeDefinition } from '../config/themes'
 
 interface TunnelFrame {
   line: LineSegments<BufferGeometry, LineBasicMaterial>
+  material: LineBasicMaterial
 }
 
 export class TunnelGrid {
   readonly object = new Group()
 
-  private readonly material = new LineBasicMaterial({
+  private readonly frameMaterial = new LineBasicMaterial({
     color: new Color('#39f3ff'),
     transparent: true,
-    opacity: 0.72,
+    opacity: 0.42,
   })
 
+  private readonly railMaterial = new LineBasicMaterial({
+    color: new Color('#39f3ff'),
+    transparent: true,
+    opacity: 0.16,
+  })
+
+  private wallRails: LineSegments<BufferGeometry, LineBasicMaterial> | null = null
   private frames: TunnelFrame[] = []
   private signature = ''
 
@@ -32,7 +40,16 @@ export class TunnelGrid {
   }
 
   setTheme(theme: ThemeDefinition): void {
-    this.material.color.set(theme.grid)
+    this.frameMaterial.color.set(theme.grid)
+    this.railMaterial.color.set(theme.grid)
+
+    if (this.wallRails) {
+      this.wallRails.material.color.set(theme.grid)
+    }
+
+    for (const frame of this.frames) {
+      frame.material.color.set(theme.grid)
+    }
   }
 
   syncConfig(config: TuningConfig): void {
@@ -50,13 +67,26 @@ export class TunnelGrid {
     this.signature = nextSignature
     this.object.clear()
     this.frames = []
+    this.wallRails = null
+
+    const railGeometry = this.createWallRailGeometry(
+      config.tunnelWidth,
+      config.tunnelHeight,
+      config.segmentSpacing * (config.segmentCount - 1) + 28,
+    )
+    this.wallRails = new LineSegments(railGeometry, this.railMaterial.clone())
+    this.object.add(this.wallRails)
 
     for (let index = 0; index < config.segmentCount; index += 1) {
       const geometry = this.createFrameGeometry(config.tunnelWidth, config.tunnelHeight)
-      const line = new LineSegments(geometry, this.material)
+      const material = this.frameMaterial.clone()
+      const line = new LineSegments(geometry, material)
       line.position.z = -index * config.segmentSpacing - 8
       this.object.add(line)
-      this.frames.push({ line })
+
+      const frame = { line, material }
+      this.frames.push(frame)
+      this.updateFrameOpacity(frame, config)
     }
   }
 
@@ -70,26 +100,54 @@ export class TunnelGrid {
       if (frame.line.position.z > wrapThreshold) {
         frame.line.position.z = resetDepth
       }
+
+      this.updateFrameOpacity(frame, config)
     }
   }
 
   private createFrameGeometry(width: number, height: number): BufferGeometry {
     const halfWidth = width * 0.5
     const halfHeight = height * 0.5
-
     const points = [
       -halfWidth, -halfHeight, 0, halfWidth, -halfHeight, 0,
       halfWidth, -halfHeight, 0, halfWidth, halfHeight, 0,
       halfWidth, halfHeight, 0, -halfWidth, halfHeight, 0,
       -halfWidth, halfHeight, 0, -halfWidth, -halfHeight, 0,
-      0, -halfHeight, 0, 0, halfHeight, 0,
-      -halfWidth, 0, 0, halfWidth, 0, 0,
-      -halfWidth * 0.65, -halfHeight * 0.65, 0, halfWidth * 0.65, halfHeight * 0.65, 0,
-      -halfWidth * 0.65, halfHeight * 0.65, 0, halfWidth * 0.65, -halfHeight * 0.65, 0,
     ]
 
     const geometry = new BufferGeometry()
     geometry.setAttribute('position', new Float32BufferAttribute(points, 3))
     return geometry
+  }
+
+  private createWallRailGeometry(width: number, height: number, depth: number): BufferGeometry {
+    const halfWidth = width * 0.5
+    const halfHeight = height * 0.5
+    const nearZ = 12
+    const farZ = -depth
+    const ceilingFloorXs = [-0.72, -0.36, 0.36, 0.72].map((value) => value * halfWidth)
+    const sideWallYs = [-0.6, 0, 0.6].map((value) => value * halfHeight)
+    const points: number[] = []
+
+    for (const x of ceilingFloorXs) {
+      points.push(x, -halfHeight, nearZ, x, -halfHeight, farZ)
+      points.push(x, halfHeight, nearZ, x, halfHeight, farZ)
+    }
+
+    for (const y of sideWallYs) {
+      points.push(-halfWidth, y, nearZ, -halfWidth, y, farZ)
+      points.push(halfWidth, y, nearZ, halfWidth, y, farZ)
+    }
+
+    const geometry = new BufferGeometry()
+    geometry.setAttribute('position', new Float32BufferAttribute(points, 3))
+    return geometry
+  }
+
+  private updateFrameOpacity(frame: TunnelFrame, config: TuningConfig): void {
+    const fadeDepth = config.segmentSpacing * 7
+    const normalizedDepth = Math.min(1, Math.max(0, Math.abs(frame.line.position.z) - 8) / fadeDepth)
+    const visibility = Math.pow(1 - normalizedDepth, 3.6)
+    frame.material.opacity = 0.012 + visibility * 0.34
   }
 }

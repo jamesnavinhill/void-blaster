@@ -24,7 +24,6 @@ export class InputController {
     this.host.tabIndex = 0
     this.host.addEventListener('mouseenter', () => this.host.focus())
     this.host.addEventListener('mousemove', this.handleMouseMove)
-    this.host.addEventListener('mouseleave', this.handleMouseLeave)
     this.host.addEventListener('mousedown', this.handleMouseDown)
     this.host.addEventListener('mouseup', this.handleMouseUp)
     this.host.addEventListener('contextmenu', this.preventDefault)
@@ -75,10 +74,6 @@ export class InputController {
     const y = -(((event.clientY - rect.top) / rect.height) * 2 - 1)
     this.pointer.set(x, y)
     this.pointerActive = true
-  }
-
-  private readonly handleMouseLeave = (): void => {
-    this.pointerActive = false
   }
 
   private readonly handleMouseDown = (event: MouseEvent): void => {

@@ -26,17 +26,19 @@ import { TunnelGrid } from './world/TunnelGrid'
 
 interface ShellRefs {
   viewport: HTMLDivElement
+  hud: HTMLDivElement
   canvasHost: HTMLDivElement
   rail: HTMLDivElement
   railToggle: HTMLButtonElement
-  themeValue: HTMLSpanElement
-  speedValue: HTMLSpanElement
   encounterValue: HTMLSpanElement
-  bossValue: HTMLSpanElement
+  toast: HTMLDivElement
+  toastValue: HTMLSpanElement
   scoreValue: HTMLSpanElement
   integrityValue: HTMLSpanElement
-  enemyCountValue: HTMLSpanElement
-  progressValue: HTMLSpanElement
+  integrityFill: HTMLDivElement
+  bossValue: HTMLSpanElement
+  bossFill: HTMLDivElement
+  bossWidget: HTMLDivElement
   specialValue: HTMLSpanElement
   specialHint: HTMLSpanElement
   cooldownFill: HTMLDivElement
@@ -86,12 +88,13 @@ export class VoidBlasterApp {
   private lastTimestamp = 0
   private railOpen = false
   private mode: CombatMode = 'combat'
-  private lastCombatLog = 'Sector clear'
   private encounterPhase = 'WAVE'
   private encounterLabel = 'Opening Surge'
   private bossDefeated = false
   private phaseBombOverdrive = false
   private rewardLabel = 'Locked'
+  private rewardToastUntil = 0
+  private bossStatusVisibleUntil = 0
 
   constructor(private readonly root: HTMLDivElement) {
     this.shell = this.buildShell()
@@ -216,17 +219,16 @@ export class VoidBlasterApp {
 
     if (encounterUpdate.startBossId && !this.bossSystem.isActive() && !this.bossDefeated) {
       this.bossSystem.startEncounter(getBossById(encounterUpdate.startBossId))
-      this.lastCombatLog = 'Boss frame entering sector'
     }
 
     if (encounterUpdate.unlockedSpecialId === 'phase-bomb' && !this.phaseBombOverdrive) {
       this.phaseBombOverdrive = true
       this.rewardLabel = encounterUpdate.unlockedRewardLabel ?? 'Phase Bomb Overdrive'
+      this.rewardToastUntil = this.simulationTime + 3.6
       this.activeSpecialIndex = Math.max(
         0,
         specialCatalog.findIndex((entry) => entry.id === 'phase-bomb'),
       )
-      this.lastCombatLog = `${this.rewardLabel} unlocked`
     }
 
     this.weapons.update(
@@ -269,11 +271,9 @@ export class VoidBlasterApp {
       if (result.destroyed) {
         this.score += result.scoreValue
         this.bossDefeated = true
-        this.lastCombatLog = `${result.rewardLabel} secured`
+        this.bossStatusVisibleUntil = this.simulationTime + 4.5
         continue
       }
-
-      this.lastCombatLog = 'Boss core destabilized'
     }
 
     const liveBoss = this.bossSystem.isInIntro() ? null : this.bossSystem.getSnapshot()
@@ -288,8 +288,6 @@ export class VoidBlasterApp {
       )
     ) {
       this.playerIntegrity = Math.max(0, this.playerIntegrity - liveBoss.contactDamage)
-      this.lastCombatLog =
-        this.playerIntegrity > 0 ? `${liveBoss.name} raked the hull` : 'Hull breach'
 
       if (this.playerIntegrity <= 0) {
         this.mode = 'breach'
@@ -330,11 +328,8 @@ export class VoidBlasterApp {
       if (result.destroyed) {
         this.score += result.scoreValue
         this.destroyedEnemies += 1
-        this.lastCombatLog = `${result.name} shattered`
         continue
       }
-
-      this.lastCombatLog = `${result.name} hit`
     }
   }
 
@@ -347,8 +342,6 @@ export class VoidBlasterApp {
       }
 
       this.playerIntegrity = Math.max(0, this.playerIntegrity - hit.damage)
-      this.lastCombatLog =
-        this.playerIntegrity > 0 ? `${enemy.name} clipped the hull` : 'Hull breach'
 
       if (this.playerIntegrity <= 0) {
         this.mode = 'breach'
@@ -376,21 +369,44 @@ export class VoidBlasterApp {
   private updateHud(): void {
     const special = this.getActiveSpecial()
     const cooldownRatio = this.weapons.getCooldownRatio(this.simulationTime)
+    const cooldownRemaining = this.weapons.getCooldownRemaining(this.simulationTime)
     const bossSnapshot = this.bossSystem.getSnapshot()
+    const bossVisible =
+      Boolean(bossSnapshot) ||
+      this.bossSystem.isInIntro() ||
+      (this.bossDefeated && this.simulationTime <= this.bossStatusVisibleUntil)
+    const combatActive =
+      this.enemySystem.getActiveCount() > 0 ||
+      Boolean(bossSnapshot) ||
+      this.bossSystem.isInIntro() ||
+      this.destroyedEnemies > 0 ||
+      this.mode === 'breach'
+    const toastVisible = this.simulationTime <= this.rewardToastUntil
+    const integrityRatio = Math.max(0.04, this.playerIntegrity / this.tuning.playerMaxIntegrity)
 
-    this.shell.themeValue.textContent = this.activeTheme.name
-    this.shell.speedValue.textContent = `${this.tuning.tunnelSpeed.toFixed(1)} u/s`
-    this.shell.encounterValue.textContent = `${this.encounterPhase} | ${this.encounterLabel}`
-    this.shell.bossValue.textContent =
-      bossSnapshot ? `${bossSnapshot.health}/${bossSnapshot.maxHealth}` :
-      this.bossDefeated ? this.rewardLabel :
-      'No contact'
+    this.shell.hud.dataset.combatActive = String(combatActive)
+    this.shell.hud.dataset.showBriefing = String(!combatActive && this.simulationTime < 9)
+    this.shell.toast.dataset.visible = String(toastVisible)
+    this.shell.toastValue.textContent = toastVisible ? `${this.rewardLabel} unlocked` : ''
+    this.shell.encounterValue.textContent = `${this.encounterPhase} // ${this.encounterLabel}`
     this.shell.scoreValue.textContent = this.score.toString()
     this.shell.integrityValue.textContent = `${this.playerIntegrity}/${this.tuning.playerMaxIntegrity}`
-    this.shell.enemyCountValue.textContent = `${this.enemySystem.getActiveCount()} live`
-    this.shell.progressValue.textContent = `${Math.floor(this.progress)} m`
+    this.shell.integrityFill.style.transform = `scaleX(${integrityRatio.toFixed(3)})`
+    this.shell.bossWidget.dataset.visible = String(bossVisible)
+    this.shell.bossValue.textContent =
+      bossSnapshot ? `${Math.ceil(bossSnapshot.health)}/${bossSnapshot.maxHealth}` :
+      this.bossSystem.isInIntro() ? 'Incoming' :
+      this.bossDefeated ? 'Cleared' :
+      'No contact'
+    this.shell.bossFill.style.transform = `scaleX(${(
+      bossSnapshot ? Math.max(0.04, bossSnapshot.health / bossSnapshot.maxHealth) :
+      this.bossSystem.isInIntro() ? 0.08 :
+      this.bossDefeated ? 1 :
+      0.04
+    ).toFixed(3)})`
     this.shell.specialValue.textContent = this.phaseBombOverdrive ? `${special.name}+` : special.name
-    this.shell.specialHint.textContent = `${this.weapons.getLastActivatedSpecial()} | ${this.lastCombatLog}`
+    this.shell.specialHint.textContent =
+      cooldownRemaining > 0.05 ? `${cooldownRemaining.toFixed(1)}s cooldown` : 'Ready'
     this.shell.cooldownFill.style.transform = `scaleX(${Math.max(0.04, cooldownRatio).toFixed(3)})`
   }
 
@@ -411,7 +427,7 @@ export class VoidBlasterApp {
   private setRailOpen(next: boolean): void {
     this.railOpen = next
     this.shell.rail.dataset.open = String(next)
-    this.shell.railToggle.textContent = next ? 'Close Rail' : 'Open Rail'
+    this.shell.railToggle.textContent = next ? 'Hide Tuning' : 'Tune'
   }
 
   private getActiveSpecial() {
@@ -508,61 +524,57 @@ export class VoidBlasterApp {
       <div class="app-shell">
         <section class="viewport" aria-label="Void Blaster viewport">
           <div class="viewport__canvas"></div>
-          <div class="hud">
+          <div class="hud" data-role="hud" data-combat-active="false" data-show-briefing="true">
             <div class="hud__brand">
               <p class="hud__eyebrow">Void Blaster</p>
-              <h1>Boss Ramp</h1>
-              <p class="hud__summary">Wave pacing, a first boss frame, and a reward hook now sit on top of the encounter pipeline.</p>
+              <p class="hud__encounter" data-role="encounter-value"></p>
             </div>
-            <div class="hud__stats">
-              <div>
-                <span class="hud__label">Theme</span>
-                <strong data-role="theme-value"></strong>
-              </div>
-              <div>
-                <span class="hud__label">Tunnel Speed</span>
-                <strong data-role="speed-value"></strong>
-              </div>
-              <div>
-                <span class="hud__label">Encounter</span>
-                <strong data-role="encounter-value"></strong>
-              </div>
-              <div>
-                <span class="hud__label">Boss Core</span>
-                <strong data-role="boss-value"></strong>
-              </div>
-              <div>
+
+            <div class="hud__toast" data-role="toast" data-visible="false">
+              <span data-role="toast-value"></span>
+            </div>
+
+            <div class="hud__column hud__column--left">
+              <section class="hud-widget hud-widget--hull">
+                <span class="hud__label">Hull</span>
+                <strong data-role="integrity-value"></strong>
+                <div class="hud__meter">
+                  <div class="hud__meter-fill hud__meter-fill--hull" data-role="integrity-fill"></div>
+                </div>
+              </section>
+            </div>
+
+            <div class="hud__column hud__column--right">
+              <section class="hud-widget hud-widget--score">
                 <span class="hud__label">Score</span>
                 <strong data-role="score-value"></strong>
-              </div>
-              <div>
-                <span class="hud__label">Integrity</span>
-                <strong data-role="integrity-value"></strong>
-              </div>
-              <div>
-                <span class="hud__label">Enemies</span>
-                <strong data-role="enemy-count-value"></strong>
-              </div>
-              <div>
-                <span class="hud__label">Progress</span>
-                <strong data-role="progress-value"></strong>
-              </div>
-              <div>
-                <span class="hud__label">Selected Special</span>
-                <strong data-role="special-value"></strong>
-              </div>
-            </div>
-            <div class="hud__footer">
-              <p>Move: WASD or mouse | Roll: Q / E or wheel | Fire: Space / Left Click | Special: B / Right Click | Cycle: C | Rail: F1</p>
-              <div class="hud__cooldown">
-                <span data-role="special-hint"></span>
-                <div class="hud__cooldown-track">
-                  <div class="hud__cooldown-fill" data-role="cooldown-fill"></div>
+              </section>
+
+              <section class="hud-widget hud-widget--boss" data-role="boss-widget" data-visible="false">
+                <span class="hud__label">Boss HP</span>
+                <strong data-role="boss-value"></strong>
+                <div class="hud__meter">
+                  <div class="hud__meter-fill hud__meter-fill--boss" data-role="boss-fill"></div>
                 </div>
-              </div>
+              </section>
+            </div>
+
+            <div class="hud__bottom">
+              <p class="hud__briefing">WASD move. Space fires. B triggers special. F1 opens tuning.</p>
+
+              <section class="hud-widget hud-widget--special">
+                <span class="hud__label">Special</span>
+                <strong data-role="special-value"></strong>
+                <div class="hud__cooldown">
+                  <span data-role="special-hint"></span>
+                  <div class="hud__cooldown-track">
+                    <div class="hud__cooldown-fill" data-role="cooldown-fill"></div>
+                  </div>
+                </div>
+              </section>
             </div>
           </div>
-          <button class="rail-toggle" type="button">Open Rail</button>
+          <button class="rail-toggle" type="button">Tune</button>
         </section>
 
         <aside class="rail" data-open="false">
@@ -620,17 +632,19 @@ export class VoidBlasterApp {
 
     return {
       viewport: this.root.querySelector<HTMLDivElement>('.viewport')!,
+      hud: this.root.querySelector<HTMLDivElement>('[data-role="hud"]')!,
       canvasHost: this.root.querySelector<HTMLDivElement>('.viewport__canvas')!,
       rail: this.root.querySelector<HTMLDivElement>('.rail')!,
       railToggle: this.root.querySelector<HTMLButtonElement>('.rail-toggle')!,
-      themeValue: this.root.querySelector<HTMLSpanElement>('[data-role="theme-value"]')!,
-      speedValue: this.root.querySelector<HTMLSpanElement>('[data-role="speed-value"]')!,
       encounterValue: this.root.querySelector<HTMLSpanElement>('[data-role="encounter-value"]')!,
-      bossValue: this.root.querySelector<HTMLSpanElement>('[data-role="boss-value"]')!,
+      toast: this.root.querySelector<HTMLDivElement>('[data-role="toast"]')!,
+      toastValue: this.root.querySelector<HTMLSpanElement>('[data-role="toast-value"]')!,
       scoreValue: this.root.querySelector<HTMLSpanElement>('[data-role="score-value"]')!,
       integrityValue: this.root.querySelector<HTMLSpanElement>('[data-role="integrity-value"]')!,
-      enemyCountValue: this.root.querySelector<HTMLSpanElement>('[data-role="enemy-count-value"]')!,
-      progressValue: this.root.querySelector<HTMLSpanElement>('[data-role="progress-value"]')!,
+      integrityFill: this.root.querySelector<HTMLDivElement>('[data-role="integrity-fill"]')!,
+      bossValue: this.root.querySelector<HTMLSpanElement>('[data-role="boss-value"]')!,
+      bossFill: this.root.querySelector<HTMLDivElement>('[data-role="boss-fill"]')!,
+      bossWidget: this.root.querySelector<HTMLDivElement>('[data-role="boss-widget"]')!,
       specialValue: this.root.querySelector<HTMLSpanElement>('[data-role="special-value"]')!,
       specialHint: this.root.querySelector<HTMLSpanElement>('[data-role="special-hint"]')!,
       cooldownFill: this.root.querySelector<HTMLDivElement>('[data-role="cooldown-fill"]')!,
